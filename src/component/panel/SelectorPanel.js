@@ -402,7 +402,14 @@ export class SelectorPanel {
       const pop = createStickyPopover({ anchor: row, content: acts, strategy: 'absolute' })
       this.popovers.set(row, pop)
       let closeTimer = null
+      let ignoreEnterUntil = 0
+      const origClose = pop.close
+      pop.close = () => {
+        ignoreEnterUntil = Date.now() + 120
+        origClose()
+      }
       row.addEventListener('mouseenter', () => {
+        if (Date.now() < ignoreEnterUntil) return
         if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
         this.currentPopover = pop
         pop.open()
@@ -416,8 +423,17 @@ export class SelectorPanel {
       // Cancel close if mouse enters the popover content
       acts.addEventListener('mouseenter', () => {
         if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+        clearTimeout(this.timers.openClose)
+      })
+      acts.addEventListener('mouseleave', () => {
+        if (!pop.isPinned()) {
+          closeTimer = setTimeout(() => {
+            if (!pop.isPinned()) pop.close()
+          }, 150)
+        }
       })
       acts.addEventListener('click', (e) => {
+        clearTimeout(this.timers.openClose)
         const tgt = /** @type {HTMLElement|null} */ (e.target instanceof HTMLElement ? e.target.closest('[data-item-action]') : null)
         if (tgt) {
           e.preventDefault()
@@ -456,6 +472,10 @@ export class SelectorPanel {
 
   /** Close dropdown */
   close () {
+    if (this.currentPopover && !this.currentPopover.isPinned()) {
+      this.currentPopover.close()
+      this.currentPopover = null
+    }
     if (this.dom.wrap.classList.contains('open')) {
       this.dom.wrap.classList.remove('open')
       this.dom.wrap.dispatchEvent(new CustomEvent('selector:closed', { bubbles: true, composed: true }))

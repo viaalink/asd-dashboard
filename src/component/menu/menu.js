@@ -126,6 +126,89 @@ function initSW () {
  * @returns {void}
  */
 function initializeMainMenu () {
+  document.getElementById('viaalink-topbar')?.remove()
+  document.getElementById('controls')?.remove()
+
+  // Viaalink v2 Top Navigation Bar (Brand, Hub Switcher, Surface Switcher, Command Palette)
+  const topbar = document.createElement('header')
+  topbar.id = 'viaalink-topbar'
+  topbar.className = 'viaalink-topbar'
+  topbar.style.display = 'flex'
+  topbar.style.alignItems = 'center'
+
+  const brandControl = document.createElement('div')
+  brandControl.id = 'brand-control'
+  brandControl.dataset.testid = 'brand-control'
+  brandControl.style.display = 'inline-flex'
+  brandControl.style.alignItems = 'center'
+  const brandMark = document.createElement('span')
+  brandMark.className = 'viaalink-brand-mark'
+  brandMark.setAttribute('aria-hidden', 'true')
+  brandMark.textContent = 'V'
+  const brandText = document.createElement('span')
+  brandText.className = 'viaalink-brand-text'
+  brandText.textContent = 'Viaalink'
+  brandControl.append(brandMark, brandText)
+
+  const hubControl = document.createElement('div')
+  hubControl.id = 'hub-control'
+  hubControl.dataset.testid = 'hub-control'
+  hubControl.style.display = 'inline-flex'
+  hubControl.style.alignItems = 'center'
+
+  const surfaceSwitcher = document.createElement('div')
+  surfaceSwitcher.id = 'surface-switcher'
+  surfaceSwitcher.dataset.testid = 'surface-switcher'
+  surfaceSwitcher.style.display = 'inline-flex'
+  surfaceSwitcher.style.alignItems = 'center'
+
+  const navBoardsBtn = document.createElement('button')
+  navBoardsBtn.type = 'button'
+  navBoardsBtn.id = 'nav-boards'
+  navBoardsBtn.className = 'surface-tab-btn active'
+  navBoardsBtn.dataset.testid = 'nav-boards'
+  navBoardsBtn.innerHTML = '<span>Boards</span><span class="asd-kbd">⌘B</span>'
+
+  const navNetworkBtn = document.createElement('button')
+  navNetworkBtn.type = 'button'
+  navNetworkBtn.id = 'nav-network'
+  navNetworkBtn.className = 'surface-tab-btn'
+  navNetworkBtn.dataset.testid = 'nav-network'
+  navNetworkBtn.innerHTML = '<span>Network</span><span class="asd-kbd">⌘N</span>'
+
+  surfaceSwitcher.append(navBoardsBtn, navNetworkBtn)
+
+  const topbarSpacer = document.createElement('div')
+  topbarSpacer.style.flex = '1 1 auto'
+
+  const paletteControl = document.createElement('div')
+  paletteControl.id = 'palette-control'
+  const paletteBtn = document.createElement('button')
+  paletteBtn.type = 'button'
+  paletteBtn.id = 'command-palette-trigger'
+  paletteBtn.className = 'palette-trigger-btn'
+  paletteBtn.dataset.testid = 'command-palette-trigger'
+  paletteBtn.title = 'Open Command Palette (⌘K)'
+  paletteBtn.innerHTML = '<span>Search…</span><span class="asd-kbd">⌘K</span>'
+
+  const themeBtn = document.createElement('button')
+  themeBtn.type = 'button'
+  themeBtn.id = 'theme-toggle-btn'
+  themeBtn.className = 'palette-trigger-btn'
+  themeBtn.dataset.testid = 'theme-toggle-btn'
+  themeBtn.title = 'Toggle Dark / Light Theme'
+  themeBtn.textContent = '◐ Theme'
+  themeBtn.addEventListener('click', () => {
+    const nextDark = !document.documentElement.classList.contains('dark')
+    document.documentElement.classList.toggle('dark', nextDark)
+    document.documentElement.dataset.theme = nextDark ? 'dark' : 'light'
+    document.body.classList.toggle('dark-mode', nextDark)
+  })
+
+  paletteControl.append(paletteBtn, themeBtn)
+
+  topbar.append(brandControl, hubControl, surfaceSwitcher, topbarSpacer, paletteControl)
+
   const menu = document.createElement('menu')
   menu.id = 'controls'
 
@@ -258,7 +341,8 @@ function initializeMainMenu () {
 
   menu.appendChild(adminControl)
 
-  document.body.insertBefore(menu, document.body.firstChild) // Append as the first child
+  document.body.insertBefore(menu, document.body.firstChild)
+  document.body.insertBefore(topbar, menu)
   initSW()
 }
 

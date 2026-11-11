@@ -90,12 +90,14 @@ export function createStickyPopover (cfg) {
     focusables = Array.from(root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
     if (focusables[0] instanceof HTMLElement) focusables[0].focus()
     root.addEventListener('keydown', trapFocus)
+    document.addEventListener('keydown', onDocKey)
     listeners.push(['keydown', trapFocus])
   }
 
   const unmount = () => {
     if (!root) return
     root.removeEventListener('keydown', trapFocus)
+    document.removeEventListener('keydown', onDocKey)
     listeners.splice(0)
     anchor.appendChild(content)
     root.remove()
@@ -110,6 +112,7 @@ export function createStickyPopover (cfg) {
       root.style.left = pos.left + 'px'
       root.style.top = pos.top + 'px'
       root.style.position = currentStrategy
+      if (focusables[0] instanceof HTMLElement) focusables[0].focus()
     },
     pin () {
       if (!root) return

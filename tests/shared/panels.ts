@@ -34,10 +34,14 @@ export async function ensurePanelOpen (page: Page, panelTestId: string) {
   // Firefox headless has hover issues - use JavaScript to force open
   // First try hover (works reliably in Chromium)
   await panel.hover({ force: true })
-  await page.waitForTimeout(ciWait)
+  await panel.evaluate((el) => {
+    el.classList.add('open')
+    el.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }))
+  }).catch(() => {})
 
   // If not visible, use JavaScript to add 'open' class directly
   if (!await dropdown.isVisible().catch(() => false)) {
+    await page.waitForTimeout(ciWait)
     await panel.evaluate((el) => {
       el.classList.add('open')
       // Also trigger mouseenter to ensure any JS handlers run
