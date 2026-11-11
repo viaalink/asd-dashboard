@@ -380,8 +380,14 @@
     "name": "computeLocalServiceCounts",
     "kind": "function",
     "file": "src/hubs/hubRegistry.js",
-    "description": "Derive live service counts from StorageManager for the current workspace hub.",
-    "params": [],
+    "description": "Derive live service counts from a services array or StorageManager.",
+    "params": [
+      {
+        "name": "servicesList",
+        "type": "Array<any>",
+        "desc": ""
+      }
+    ],
     "returns": "{servicesUp: number, servicesTotal: number, status: 'online'|'degraded'|'offline'}"
   },
   {
@@ -701,6 +707,20 @@
       }
     ],
     "returns": ""
+  },
+  {
+    "name": "escapeHtml",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Escape a string for safe HTML interpolation.",
+    "params": [
+      {
+        "name": "val",
+        "type": "any",
+        "desc": ""
+      }
+    ],
+    "returns": "string"
   },
   {
     "name": "exportConfig",
@@ -1244,7 +1264,7 @@
     "name": "inferServicePort",
     "kind": "function",
     "file": "src/views/network/topologyBuilder.js",
-    "description": "Infer port number from a service object or URL/id.",
+    "description": "Infer port number from a service object's explicit port, URL, or `service-<port>` id.",
     "params": [
       {
         "name": "svc",
@@ -1512,7 +1532,7 @@
     "name": "loadInjectedMitm",
     "kind": "function",
     "file": "src/views/network/NetworkView.js",
-    "description": "Load injected mitmproxy taps from StorageManager.misc.",
+    "description": "Load route mitmproxy annotations from StorageManager.misc.",
     "params": [],
     "returns": "Array<{edgeId: string, mitmId: string, from: string, to: string, label: string, x: number, y: number}>"
   },
@@ -2152,6 +2172,20 @@
     "returns": "object"
   },
   {
+    "name": "sanitizeHubUrl",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Validate and normalize an HTTP(S) hub URL.",
+    "params": [
+      {
+        "name": "rawUrl",
+        "type": "string",
+        "desc": ""
+      }
+    ],
+    "returns": "string|null"
+  },
+  {
     "name": "sanitizeServices",
     "kind": "function",
     "file": "src/storage/validators.js",
@@ -2235,7 +2269,7 @@
     "name": "saveInjectedMitm",
     "kind": "function",
     "file": "src/views/network/NetworkView.js",
-    "description": "Save injected mitmproxy taps to StorageManager.misc.",
+    "description": "Save route mitmproxy annotations to StorageManager.misc.",
     "params": [
       {
         "name": "list",
@@ -2285,7 +2319,7 @@
     "name": "setActiveHubId",
     "kind": "function",
     "file": "src/hubs/hubRegistry.js",
-    "description": "Set the active hub by ID.",
+    "description": "Set the active hub by ID and load its services into the workspace.",
     "params": [
       {
         "name": "id",
@@ -2539,6 +2573,20 @@
       }
     ],
     "returns": "Promise<void>"
+  },
+  {
+    "name": "syncServicesFromHub",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Fetch and apply services from the given hub's endpoint.",
+    "params": [
+      {
+        "name": "hub",
+        "type": "HubEntry",
+        "desc": ""
+      }
+    ],
+    "returns": "Promise<Array<any>>"
   },
   {
     "name": "toggleFullScreen",
