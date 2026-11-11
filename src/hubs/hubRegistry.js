@@ -61,18 +61,22 @@ export function sanitizeHubUrl (rawUrl) {
 export function sanitizeSafeUrl (rawUrl, opts = {}) {
   if (typeof rawUrl !== 'string') return ''
   const trimmed = rawUrl.trim()
-  if (!trimmed) return ''
+  if (!trimmed || trimmed.includes('\\')) return ''
   const allowRelative = opts.allowRelative !== false
   try {
     if (trimmed.startsWith('/')) {
-      if (trimmed.startsWith('//') || !allowRelative) return ''
+      if (trimmed.startsWith('//') || trimmed.startsWith('/\\') || !allowRelative) return ''
       const origin = typeof window !== 'undefined' && window.location?.origin
         ? window.location.origin
         : 'http://localhost:8000'
       const parsed = new URL(trimmed, origin)
       if (parsed.origin !== origin) return ''
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
-      return parsed.pathname + parsed.search + parsed.hash
+      const rel = parsed.pathname + parsed.search + parsed.hash
+      if (!rel.startsWith('/') || rel.startsWith('//') || rel.startsWith('/\\') || rel.includes('\\')) return ''
+      const recheck = new URL(rel, origin)
+      if (recheck.origin !== origin) return ''
+      return rel
     }
     const parsed = new URL(trimmed)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''

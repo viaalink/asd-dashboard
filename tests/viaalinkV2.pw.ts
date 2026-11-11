@@ -265,6 +265,29 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     const xssTriggered = await page.evaluate(() => Boolean((window as any).__xssConfig || (window as any).__xssService))
     expect(xssTriggered).toBe(false)
     await expect(page.locator('[data-testid="network-detail-drawer"] img')).toHaveCount(0)
+
+    // Verify sanitizeSafeUrl rejects /.//evil, //evil, /\evil, JaVaScRiPt:, data: and accepts valid relative URLs
+    const urlCheck = await page.evaluate(async () => {
+      const { sanitizeSafeUrl } = await import('/hubs/hubRegistry.js')
+      return {
+        dotSlashDouble: sanitizeSafeUrl('/.//evil', { allowRelative: true }),
+        doubleSlash: sanitizeSafeUrl('//evil', { allowRelative: true }),
+        backslash: sanitizeSafeUrl('/\\evil', { allowRelative: true }),
+        mixedCaseJs: sanitizeSafeUrl(' JaVaScRiPt:alert(1)', { allowRelative: true }),
+        dataUri: sanitizeSafeUrl('data:text/html,<script>alert(1)</script>', { allowRelative: true }),
+        validRelLocal: sanitizeSafeUrl('/asde/terminal/?arg=via', { allowRelative: true }),
+        validRelRemote: sanitizeSafeUrl('/asde/terminal/?arg=via', { allowRelative: false }),
+        validHttpRemote: sanitizeSafeUrl('https://staging.viaalink.dev/api', { allowRelative: false })
+      }
+    })
+    expect(urlCheck.dotSlashDouble).toBe('')
+    expect(urlCheck.doubleSlash).toBe('')
+    expect(urlCheck.backslash).toBe('')
+    expect(urlCheck.mixedCaseJs).toBe('')
+    expect(urlCheck.dataUri).toBe('')
+    expect(urlCheck.validRelLocal).toBe('/asde/terminal/?arg=via')
+    expect(urlCheck.validRelRemote).toBe('')
+    expect(urlCheck.validHttpRemote).toBe('https://staging.viaalink.dev/api')
   })
 
   test('opens Command Palette (⌘K) and navigates to Network node', async ({ page }) => {
