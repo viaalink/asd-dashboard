@@ -5,7 +5,7 @@ const fs = require('fs')
 const path = require('path')
 
 const LOGFILE = 'webserver.log'
-const PORT = 8000
+const PORT = Number(process.env.PORT || 8000)
 const BASEDIR = 'src'
 
 /**

@@ -95,8 +95,10 @@ test.describe('WidgetStore UI Tests', () => {
   })
 
   test('LRU Eviction Policy', async ({ page }, testInfo) => {
-    // CI needs slightly more time for IndexedDB + modal handling
-    if (process.env.CI) {
+    // CI and Firefox need slightly more time for IndexedDB + modal handling + reload
+    if (testInfo.project.name === 'firefox') {
+      test.setTimeout(30000)
+    } else if (process.env.CI) {
       test.setTimeout(15000)
     }
     // Boot with maxSize=2 so adding a 3rd forces an eviction

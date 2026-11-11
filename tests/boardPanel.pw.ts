@@ -69,21 +69,16 @@ test.describe('Board panel', () => {
     const panel = page.locator('[data-testid="board-panel"]')
     await panel.focus()
     await page.keyboard.press('Enter') // Open panel
+    await expect(panel.locator('.dropdown-content')).toBeVisible()
     const firstItem = panel.locator('.panel-item').first()
 
     // Hover to trigger sticky popover
-    await firstItem.hover()
-    await page.waitForTimeout(200)
+    await hoverPanelItem(page, firstItem)
 
     const popover = page.locator('[data-sticky-popover]')
     await expect(popover).toBeVisible()
 
-    // Move mouse away first to prevent re-triggering on close
-    await page.mouse.move(0, 0)
-    await page.waitForTimeout(100)
-
-    // Escape closes the popover (focus must be inside popover)
-    await popover.locator('button').first().focus()
+    // Escape closes the popover (focus is inside popover)
     await page.keyboard.press('Escape')
     await expect(popover).toHaveCount(0)
   })

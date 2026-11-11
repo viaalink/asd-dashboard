@@ -257,12 +257,72 @@
     "returns": "string"
   },
   {
+    "name": "buildDefaultLocalHub",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Build the default local workspace hub entry from current origin and config.",
+    "params": [],
+    "returns": "HubEntry"
+  },
+  {
+    "name": "buildPaletteCommands",
+    "kind": "function",
+    "file": "src/component/palette/CommandPalette.js",
+    "description": "Build the current list of searchable commands for the Command Palette.",
+    "params": [
+      {
+        "name": "ctx",
+        "type": "{switchSurface: (s: 'boards'|'network') => void, openInNetwork: (id: string) => void}",
+        "desc": ""
+      }
+    ],
+    "returns": "PaletteCommand[]"
+  },
+  {
+    "name": "buildWorkspaceTopology",
+    "kind": "function",
+    "file": "src/views/network/topologyBuilder.js",
+    "description": "Build the complete topology graph (nodes + edges) from workspace services.",
+    "params": [
+      {
+        "name": "services",
+        "type": "Array<any>",
+        "desc": ""
+      },
+      {
+        "name": "hiddenIds",
+        "type": "Set<string>",
+        "desc": ""
+      },
+      {
+        "name": "customPositions",
+        "type": "Record<string, {x: number, y: number}>",
+        "desc": ""
+      }
+    ],
+    "returns": "{nodes: TopologyNode[], edges: TopologyEdge[], ttydOnline: boolean}"
+  },
+  {
     "name": "checkLogStatus",
     "kind": "function",
     "file": "src/utils/Logger.js",
     "description": "Check whether logging is enabled for the current file. Uses localStorage key `log` which may contain `'all'` or comma-separated filenames.",
     "params": [],
     "returns": "boolean"
+  },
+  {
+    "name": "classifyServiceKind",
+    "kind": "function",
+    "file": "src/views/network/topologyBuilder.js",
+    "description": "Classify a workspace service into a topology node kind.",
+    "params": [
+      {
+        "name": "svc",
+        "type": "{id?: string, name?: string, url?: string, kind?: string}",
+        "desc": ""
+      }
+    ],
+    "returns": "NodeKind"
   },
   {
     "name": "clearConfigFragment",
@@ -317,6 +377,20 @@
     "returns": "string"
   },
   {
+    "name": "computeLocalServiceCounts",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Derive live service counts from a services array or StorageManager.",
+    "params": [
+      {
+        "name": "servicesList",
+        "type": "Array<any>",
+        "desc": ""
+      }
+    ],
+    "returns": "{servicesUp: number, servicesTotal: number, status: 'online'|'degraded'|'offline'}"
+  },
+  {
     "name": "configureWidget",
     "kind": "function",
     "file": "src/component/widget/widgetManagement.js",
@@ -329,20 +403,6 @@
       }
     ],
     "returns": "Promise<void>"
-  },
-  {
-    "name": "confirmCapacity",
-    "kind": "function",
-    "file": "src/component/widget/widgetStore.js",
-    "description": "Ensure capacity before adding a widget. Prompts for eviction when full.",
-    "params": [
-      {
-        "name": "needed",
-        "type": "number",
-        "desc": "- Number of widgets that will be added."
-      }
-    ],
-    "returns": "Promise<boolean>"
   },
   {
     "name": "createBoard",
@@ -580,6 +640,14 @@
     "returns": "void"
   },
   {
+    "name": "emitHubsChanged",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Emit a standardized hubs-changed custom event.",
+    "params": [],
+    "returns": "void"
+  },
+  {
     "name": "enableLogs",
     "kind": "function",
     "file": "src/utils/Logger.js",
@@ -641,6 +709,20 @@
     "returns": ""
   },
   {
+    "name": "escapeHtml",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Escape a string for safe HTML interpolation.",
+    "params": [
+      {
+        "name": "val",
+        "type": "any",
+        "desc": ""
+      }
+    ],
+    "returns": "string"
+  },
+  {
     "name": "exportConfig",
     "kind": "function",
     "file": "src/component/configModal/exportConfig.js",
@@ -666,20 +748,6 @@
       }
     ],
     "returns": "void"
-  },
-  {
-    "name": "fetchJson",
-    "kind": "function",
-    "file": "src/component/widget/utils/fetchServices.js",
-    "description": "Fetches and parses a JSON file from a URL.",
-    "params": [
-      {
-        "name": "url",
-        "type": "string",
-        "desc": "- The URL to fetch the JSON from."
-      }
-    ],
-    "returns": "Promise<object|null>"
   },
   {
     "name": "fetchJson",
@@ -713,9 +781,9 @@
     "name": "fetchServices",
     "kind": "function",
     "file": "src/component/widget/utils/fetchServices.js",
-    "description": "Retrieve the list of services from query params, localStorage or a default file.",
+    "description": "Fetch services with lightweight caching so widget panels avoid redundant work. Delegates to the shared core implementation to ensure consistent priority order.",
     "params": [],
-    "returns": "Promise<Array>"
+    "returns": "Promise<Array<import('../../../types.js').Service>>"
   },
   {
     "name": "fetchServices",
@@ -754,6 +822,30 @@
     "returns": "string"
   },
   {
+    "name": "formatServiceEndpoint",
+    "kind": "function",
+    "file": "src/views/network/topologyBuilder.js",
+    "description": "Extract a concise route or host/port sublabel from a service URL.",
+    "params": [
+      {
+        "name": "url",
+        "type": "string|undefined",
+        "desc": ""
+      },
+      {
+        "name": "fallbackId",
+        "type": "string",
+        "desc": ""
+      },
+      {
+        "name": "port",
+        "type": "number|null",
+        "desc": ""
+      }
+    ],
+    "returns": "string"
+  },
+  {
     "name": "get",
     "kind": "function",
     "file": "src/component/widget/widgetStore.js",
@@ -766,6 +858,30 @@
       }
     ],
     "returns": "HTMLElement|undefined"
+  },
+  {
+    "name": "getActiveHub",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Get the active hub object.",
+    "params": [],
+    "returns": "HubEntry"
+  },
+  {
+    "name": "getActiveHubId",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Get the currently active hub ID.",
+    "params": [],
+    "returns": "string"
+  },
+  {
+    "name": "getActiveTopologyServices",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Get the services list for the currently active hub without mutating StorageManager.",
+    "params": [],
+    "returns": "Array<any>"
   },
   {
     "name": "getAuthToken",
@@ -814,6 +930,14 @@
     "description": "Get the id of the currently active view element.",
     "params": [],
     "returns": "string"
+  },
+  {
+    "name": "getHubs",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Load all registered hubs from StorageManager.misc, ensuring the local hub is present and synced.",
+    "params": [],
+    "returns": "HubEntry[]"
   },
   {
     "name": "getImportFlags",
@@ -1145,6 +1269,20 @@
     "returns": "Promise<void>"
   },
   {
+    "name": "inferServicePort",
+    "kind": "function",
+    "file": "src/views/network/topologyBuilder.js",
+    "description": "Infer port number from a service object's explicit port, URL, or `service-<port>` id.",
+    "params": [
+      {
+        "name": "svc",
+        "type": "any",
+        "desc": ""
+      }
+    ],
+    "returns": "number|null"
+  },
+  {
     "name": "info",
     "kind": "function",
     "file": "src/utils/Logger.js",
@@ -1312,6 +1450,14 @@
     "returns": "{dispose: () => void, rescan: () => void}"
   },
   {
+    "name": "isActiveHubUnreachable",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Return true when the currently selected remote hub failed its last fetch (CORS/offline).",
+    "params": [],
+    "returns": "boolean"
+  },
+  {
     "name": "isAdding",
     "kind": "function",
     "file": "src/component/widget/widgetStore.js",
@@ -1323,6 +1469,14 @@
         "desc": ""
       }
     ],
+    "returns": "boolean"
+  },
+  {
+    "name": "isRemoteHubActive",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Return true when a non-local remote hub is currently selected.",
+    "params": [],
     "returns": "boolean"
   },
   {
@@ -1361,6 +1515,14 @@
     "returns": "void"
   },
   {
+    "name": "loadCustomEdges",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Load user-drawn custom edges from StorageManager.misc.",
+    "params": [],
+    "returns": "Array<import('./topologyBuilder.js').TopologyEdge>"
+  },
+  {
     "name": "loadFromFragment",
     "kind": "function",
     "file": "src/utils/fragmentLoader.js",
@@ -1381,6 +1543,38 @@
     "description": "Loads configuration from various sources in a specific order: URL params, localStorage, then a default file.",
     "params": [],
     "returns": "Promise<object|null>"
+  },
+  {
+    "name": "loadHiddenNodeIds",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Load hidden node IDs from StorageManager.misc.",
+    "params": [],
+    "returns": "Set<string>"
+  },
+  {
+    "name": "loadInjectedMitm",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Load route mitmproxy annotations from StorageManager.misc.",
+    "params": [],
+    "returns": "Array<{edgeId: string, mitmId: string, from: string, to: string, label: string, x: number, y: number}>"
+  },
+  {
+    "name": "loadNodePositions",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Load custom node positions from StorageManager.misc.",
+    "params": [],
+    "returns": "Record<string, {x: number, y: number}>"
+  },
+  {
+    "name": "loadStickyNotes",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Load sticky notes for the network canvas (seeded with default notes if never initialized).",
+    "params": [],
+    "returns": "Array<{id: string, text: string, x: number, y: number}>"
   },
   {
     "name": "lock",
@@ -1508,6 +1702,42 @@
     "returns": "SelectorPanel|null"
   },
   {
+    "name": "mountCommandPalette",
+    "kind": "function",
+    "file": "src/component/palette/CommandPalette.js",
+    "description": "Mount the Command Palette overlay and bind ⌘K / Ctrl+K shortcuts.",
+    "params": [
+      {
+        "name": "ctx",
+        "type": "{switchSurface: (s: 'boards'|'network') => void, openInNetwork: (id: string) => void}",
+        "desc": ""
+      }
+    ],
+    "returns": "{open: () => void, close: () => void}"
+  },
+  {
+    "name": "mountHubSwitcher",
+    "kind": "function",
+    "file": "src/hubs/HubSwitcher.js",
+    "description": "Mount the Hub Switcher pill and popover into #hub-control.",
+    "params": [],
+    "returns": "{refresh: () => void}|null"
+  },
+  {
+    "name": "mountNetworkView",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Mount the interactive Network View into #network-surface.",
+    "params": [
+      {
+        "name": "opts",
+        "type": "{onSwitchToBoards?: () => void}",
+        "desc": ""
+      }
+    ],
+    "returns": "{refresh: () => void, focusNode: (id: string) => void}|null"
+  },
+  {
     "name": "mountServiceControl",
     "kind": "function",
     "file": "src/component/service/ServiceControl.js",
@@ -1565,6 +1795,22 @@
     "returns": "Promise<void>"
   },
   {
+    "name": "openGapAnalysisModal",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Open the Architecture & Gap Analysis modal with filter and Markdown copy support.",
+    "params": [],
+    "returns": "void"
+  },
+  {
+    "name": "openHubManagerModal",
+    "kind": "function",
+    "file": "src/hubs/HubSwitcher.js",
+    "description": "Open the Hub Manager modal to add, edit, probe, or delete workspace hubs.",
+    "params": [],
+    "returns": "void"
+  },
+  {
     "name": "openModal",
     "kind": "function",
     "file": "src/component/modal/modalFactory.js",
@@ -1620,20 +1866,6 @@
   {
     "name": "parseBase64",
     "kind": "function",
-    "file": "src/component/widget/utils/fetchServices.js",
-    "description": "Parses a base64 encoded JSON string.",
-    "params": [
-      {
-        "name": "data",
-        "type": "string",
-        "desc": "- The base64 encoded string."
-      }
-    ],
-    "returns": "object|null"
-  },
-  {
-    "name": "parseBase64",
-    "kind": "function",
     "file": "src/utils/fetchServices.js",
     "description": "Parses a base64 encoded JSON string.",
     "params": [
@@ -1682,6 +1914,20 @@
     "returns": "void"
   },
   {
+    "name": "probeHubHealth",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Probe a hub URL for health status and service counts.",
+    "params": [
+      {
+        "name": "id",
+        "type": "string",
+        "desc": ""
+      }
+    ],
+    "returns": "Promise<HubEntry|null>"
+  },
+  {
     "name": "refreshRowCounts",
     "kind": "function",
     "file": "src/component/menu/widgetSelectorPanel.js",
@@ -1710,6 +1956,20 @@
       }
     ],
     "returns": "void"
+  },
+  {
+    "name": "removeHub",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Remove a hub by ID (cannot remove hub-local).",
+    "params": [
+      {
+        "name": "id",
+        "type": "string",
+        "desc": ""
+      }
+    ],
+    "returns": "boolean"
   },
   {
     "name": "removeImportFlagsFromUrl",
@@ -1936,6 +2196,39 @@
     "returns": "object"
   },
   {
+    "name": "sanitizeHubUrl",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Validate and normalize an HTTP(S) hub URL.",
+    "params": [
+      {
+        "name": "rawUrl",
+        "type": "string",
+        "desc": ""
+      }
+    ],
+    "returns": "string|null"
+  },
+  {
+    "name": "sanitizeSafeUrl",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Validate a service or action URL. Allows absolute http(s) URLs, and optionally same-origin relative URLs starting with single `/`. Rejects `javascript:`, `data:`, `file:`, protocol-relative `//`, and any other scheme.",
+    "params": [
+      {
+        "name": "rawUrl",
+        "type": "any",
+        "desc": ""
+      },
+      {
+        "name": "opts",
+        "type": "{allowRelative?: boolean}",
+        "desc": ""
+      }
+    ],
+    "returns": "string"
+  },
+  {
     "name": "sanitizeServices",
     "kind": "function",
     "file": "src/storage/validators.js",
@@ -1948,6 +2241,67 @@
       }
     ],
     "returns": "Array<object>"
+  },
+  {
+    "name": "sanitizeTopologyServices",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Sanitize a list of services for topology rendering. Remote hub services are strictly read-only (no fallback actions, no relative URLs, never stored in StorageManager). Local services allow same-origin relative URLs and http(s) URLs, rejecting `javascript:` and other schemes.",
+    "params": [
+      {
+        "name": "rawList",
+        "type": "Array<any>",
+        "desc": ""
+      },
+      {
+        "name": "isRemote",
+        "type": "boolean",
+        "desc": ""
+      }
+    ],
+    "returns": "Array<any>"
+  },
+  {
+    "name": "saveCustomEdges",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Save user-drawn custom edges to StorageManager.misc.",
+    "params": [
+      {
+        "name": "list",
+        "type": "Array<import('./topologyBuilder.js').TopologyEdge>",
+        "desc": ""
+      }
+    ],
+    "returns": "void"
+  },
+  {
+    "name": "saveHiddenNodeIds",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Save hidden node IDs to StorageManager.misc.",
+    "params": [
+      {
+        "name": "set",
+        "type": "Set<string>",
+        "desc": ""
+      }
+    ],
+    "returns": "void"
+  },
+  {
+    "name": "saveHubs",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Save the hub list and emit a hubs-changed event.",
+    "params": [
+      {
+        "name": "hubs",
+        "type": "HubEntry[]",
+        "desc": ""
+      }
+    ],
+    "returns": "HubEntry[]"
   },
   {
     "name": "saveImportedSnapshot",
@@ -1974,12 +2328,68 @@
     "returns": "Promise<string>"
   },
   {
+    "name": "saveInjectedMitm",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Save route mitmproxy annotations to StorageManager.misc.",
+    "params": [
+      {
+        "name": "list",
+        "type": "Array<{edgeId: string, mitmId: string, from: string, to: string, label: string, x: number, y: number}>",
+        "desc": ""
+      }
+    ],
+    "returns": "void"
+  },
+  {
+    "name": "saveNodePositions",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Save custom node positions to StorageManager.misc.",
+    "params": [
+      {
+        "name": "map",
+        "type": "Record<string, {x: number, y: number}>",
+        "desc": ""
+      }
+    ],
+    "returns": "void"
+  },
+  {
+    "name": "saveStickyNotes",
+    "kind": "function",
+    "file": "src/views/network/NetworkView.js",
+    "description": "Save sticky notes for the network canvas.",
+    "params": [
+      {
+        "name": "notes",
+        "type": "Array<{id: string, text: string, x: number, y: number}>",
+        "desc": ""
+      }
+    ],
+    "returns": "void"
+  },
+  {
     "name": "serviceGetUUID",
     "kind": "function",
     "file": "src/utils/id.js",
     "description": "Generate a unique service id.",
     "params": [],
     "returns": "string"
+  },
+  {
+    "name": "setActiveHubId",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Set the active hub by ID and synchronize its read-only topology state.",
+    "params": [
+      {
+        "name": "id",
+        "type": "string",
+        "desc": ""
+      }
+    ],
+    "returns": "HubEntry"
   },
   {
     "name": "show",
@@ -2060,13 +2470,18 @@
     "params": [
       {
         "name": "serviceObj",
-        "type": "{url: string}",
+        "type": "{url: string, name?: string, id?: string}",
         "desc": "- Service information with a URL."
       },
       {
         "name": "widgetWrapper",
-        "type": "HTMLElement",
+        "type": "HTMLElement|null",
         "desc": "- Widget element to refresh."
+      },
+      {
+        "name": "opts",
+        "type": "{taskId?: string, onDone?: Function}",
+        "desc": ""
       }
     ],
     "returns": "void"
@@ -2148,6 +2563,20 @@
     "returns": "string"
   },
   {
+    "name": "statusDotClass",
+    "kind": "function",
+    "file": "src/hubs/HubSwitcher.js",
+    "description": "Map hub status to CSS dot class.",
+    "params": [
+      {
+        "name": "status",
+        "type": "string|undefined",
+        "desc": ""
+      }
+    ],
+    "returns": "string"
+  },
+  {
     "name": "stopResize",
     "kind": "function",
     "file": "src/component/widget/events/resizeHandler.js",
@@ -2175,6 +2604,20 @@
     "returns": "Promise<void>"
   },
   {
+    "name": "switchPrimarySurface",
+    "kind": "function",
+    "file": "src/main.js",
+    "description": "Switch the primary dashboard surface between 'boards' and 'network'.",
+    "params": [
+      {
+        "name": "surface",
+        "type": "'boards'|'network'",
+        "desc": ""
+      }
+    ],
+    "returns": "void"
+  },
+  {
     "name": "switchView",
     "kind": "function",
     "file": "src/component/board/boardManagement.js",
@@ -2192,6 +2635,20 @@
       }
     ],
     "returns": "Promise<void>"
+  },
+  {
+    "name": "syncServicesFromHub",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Fetch and cache read-only service status/counts/links from the given hub's endpoint. Never writes remote services into StorageManager, preserving local workspace services.",
+    "params": [
+      {
+        "name": "hub",
+        "type": "HubEntry",
+        "desc": ""
+      }
+    ],
+    "returns": "Promise<Array<any>>"
   },
   {
     "name": "toggleFullScreen",
@@ -2272,6 +2729,20 @@
     "description": "Update the Running/Max and total Widgets counter in the panel.",
     "params": [],
     "returns": "void"
+  },
+  {
+    "name": "upsertHub",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Add or update a hub in the registry.",
+    "params": [
+      {
+        "name": "input",
+        "type": "Partial<HubEntry> & {name: string, url: string}",
+        "desc": ""
+      }
+    ],
+    "returns": "HubEntry"
   },
   {
     "name": "upsertSnapshotByMd5",

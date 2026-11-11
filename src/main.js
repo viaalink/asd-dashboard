@@ -25,6 +25,10 @@ import { initThemeFromConfig } from './ui/theme.js'
 
 import { mountServiceControl } from './component/service/ServiceControl.js'
 import { mountRuntimeControl } from './component/runtime/RuntimeControl.js'
+import { mountHubSwitcher } from './hubs/HubSwitcher.js'
+import { getActiveHub, isRemoteHubActive, syncServicesFromHub } from './hubs/hubRegistry.js'
+import { mountNetworkView } from './views/network/NetworkView.js'
+import { mountCommandPalette } from './component/palette/CommandPalette.js'
 
 const logger = new Logger('main.js')
 Logger.enableLogs('all')
@@ -49,6 +53,39 @@ window.asd = {
 }
 
 window.addEventListener('hashchange', () => loadFromFragment(false))
+
+/**
+ * Switch the primary dashboard surface between 'boards' and 'network'.
+ * @function switchPrimarySurface
+ * @param {'boards'|'network'} surface
+ * @returns {void}
+ */
+export function switchPrimarySurface (surface) {
+  const next = surface === 'network' ? 'network' : 'boards'
+  const boardEl = /** @type {HTMLElement|null} */ (document.querySelector('main > .board'))
+  const controlsEl = /** @type {HTMLElement|null} */ (document.getElementById('controls'))
+  const netEl = /** @type {HTMLElement|null} */ (document.getElementById('network-surface'))
+  const btnBoards = document.getElementById('nav-boards')
+  const btnNetwork = document.getElementById('nav-network')
+
+  if (boardEl) {
+    boardEl.style.display = next === 'boards' ? '' : 'none'
+  }
+  if (controlsEl) {
+    controlsEl.style.display = next === 'boards' ? '' : 'none'
+  }
+  if (netEl) {
+    netEl.classList.toggle('active', next === 'network')
+    netEl.style.display = next === 'network' ? 'flex' : 'none'
+  }
+  if (btnBoards) btnBoards.classList.toggle('active', next === 'boards')
+  if (btnNetwork) btnNetwork.classList.toggle('active', next === 'network')
+
+  document.body.dataset.surface = next
+  try {
+    StorageManager.misc.setItem('activeSurface', next)
+  } catch { /* ignore before StorageManager init */ }
+}
 
 /**
  * Main application initialization function.
@@ -81,6 +118,58 @@ async function main () {
   const viewPanel = mountViewControl()
   const servicePanel = mountServiceControl()
   const runtimePanel = mountRuntimeControl()
+  const hubSwitcher = mountHubSwitcher()
+  const networkView = mountNetworkView({
+    onSwitchToBoards: () => switchPrimarySurface('boards')
+  })
+
+  const openInNetwork = (/** @type {string} */ serviceId) => {
+    switchPrimarySurface('network')
+    networkView?.focusNode(serviceId)
+  }
+
+  const switchSurfaceAndRefresh = (/** @type {'boards'|'network'} */ s) => {
+    switchPrimarySurface(s)
+    if (s === 'network') networkView?.refresh()
+  }
+
+  const commandPalette = mountCommandPalette({
+    switchSurface: switchSurfaceAndRefresh,
+    openInNetwork
+  })
+
+  window.asd.switchSurface = switchSurfaceAndRefresh
+  window.asd.openInNetwork = openInNetwork
+  window.asd.commandPalette = commandPalette
+
+  // Bind primary surface buttons & keyboard shortcuts (Alt+B, Alt+N, Alt+K / ⌘K outside inputs)
+  document.getElementById('nav-boards')?.addEventListener('click', () => switchPrimarySurface('boards'))
+  document.getElementById('nav-network')?.addEventListener('click', () => {
+    switchPrimarySurface('network')
+    networkView?.refresh()
+  })
+
+  document.addEventListener('keydown', (e) => {
+    const tgt = /** @type {HTMLElement|null} */ (e.target instanceof HTMLElement ? e.target : null)
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT' || tgt.isContentEditable)) {
+      return
+    }
+    const key = e.key.toLowerCase()
+    if ((e.altKey && !e.ctrlKey && !e.metaKey) || (e.metaKey && !e.ctrlKey && !e.altKey)) {
+      if (key === 'k') {
+        e.preventDefault()
+        commandPalette.open()
+      } else if (key === 'b') {
+        e.preventDefault()
+        switchPrimarySurface('boards')
+      } else if (key === 'n') {
+        e.preventDefault()
+        switchPrimarySurface('network')
+        networkView?.refresh()
+      }
+    }
+  })
+
   initializeDragAndDrop()
 
   // 3. Load services and configuration in parallel
@@ -126,8 +215,25 @@ async function main () {
     logger.warn('No boards available to display.')
   }
 
-  // Initial service panel population (after services & boards)
+  // Initial service and hub population (after services & boards)
+  if (isRemoteHubActive()) {
+    await syncServicesFromHub(getActiveHub()).catch(err => logger.warn('Initial remote hub sync failed:', err))
+  }
   servicePanel?.refresh()
+  hubSwitcher?.refresh()
+  networkView?.refresh()
+
+  // Honor ?surface=network, ?focus=<serviceId>, or saved activeSurface
+  const focusId = params.get('focus')
+  const requestedSurface = params.get('surface')
+  const savedSurface = StorageManager.misc.getItem('activeSurface')
+  if (focusId) {
+    openInNetwork(focusId)
+  } else if (requestedSurface === 'network' || (!requestedSurface && savedSurface === 'network')) {
+    switchPrimarySurface('network')
+  } else {
+    switchPrimarySurface('boards')
+  }
 
   // 7. Initialize modal triggers
   const buttonDebounce = 200
@@ -151,12 +257,14 @@ async function main () {
         // Repopulate panel when config (e.g., boards/views) changes
         servicePanel?.refresh()
         runtimePanel?.refresh()
+        hubSwitcher?.refresh()
         break
 
       case 'services':
         // Repopulate panel when services update
         servicePanel?.refresh()
         runtimePanel?.refresh()
+        hubSwitcher?.refresh()
         break
     }
   }

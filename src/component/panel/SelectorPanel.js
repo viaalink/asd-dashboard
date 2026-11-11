@@ -155,13 +155,20 @@ export class SelectorPanel {
   bind () {
     const schedule = (fn, ms) => { clearTimeout(this.timers.openClose); this.timers.openClose = setTimeout(fn, ms) }
 
-    const onEnter = () => schedule(() => this.open(), 0)
-    const onLeave = () => schedule(() => this.close(), 200)
-
-    for (const el of [this.dom.wrap, this.dom.content]) {
-      el.addEventListener('mouseenter', onEnter)
-      el.addEventListener('mouseleave', onLeave)
+    let lastEnterAt = 0
+    const onEnter = () => {
+      lastEnterAt = Date.now()
+      schedule(() => this.open(), 0)
     }
+    const onLeave = (e) => {
+      const related = /** @type {Node|null} */ (e?.relatedTarget || null)
+      if (related && related instanceof HTMLElement && related.closest('[data-sticky-popover]')) return
+      if (Date.now() - lastEnterAt < 150 || Date.now() - (this.lastActionAt || 0) < 600) return
+      schedule(() => this.close(), 200)
+    }
+
+    this.dom.wrap.addEventListener('mouseenter', onEnter)
+    this.dom.wrap.addEventListener('mouseleave', onLeave)
 
     const onKeydown = (e) => {
       if (e.key === 'Escape') {
@@ -402,7 +409,14 @@ export class SelectorPanel {
       const pop = createStickyPopover({ anchor: row, content: acts, strategy: 'absolute' })
       this.popovers.set(row, pop)
       let closeTimer = null
+      let ignoreEnterUntil = 0
+      const origClose = pop.close
+      pop.close = () => {
+        ignoreEnterUntil = Date.now() + 120
+        origClose()
+      }
       row.addEventListener('mouseenter', () => {
+        if (Date.now() < ignoreEnterUntil) return
         if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
         this.currentPopover = pop
         pop.open()
@@ -416,8 +430,19 @@ export class SelectorPanel {
       // Cancel close if mouse enters the popover content
       acts.addEventListener('mouseenter', () => {
         if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+        clearTimeout(this.timers.openClose)
+      })
+      acts.addEventListener('mouseleave', () => {
+        if (!pop.isPinned()) {
+          closeTimer = setTimeout(() => {
+            if (!pop.isPinned()) pop.close()
+          }, 150)
+        }
       })
       acts.addEventListener('click', (e) => {
+        this.lastActionAt = Date.now()
+        clearTimeout(this.timers.openClose)
+        this.open()
         const tgt = /** @type {HTMLElement|null} */ (e.target instanceof HTMLElement ? e.target.closest('[data-item-action]') : null)
         if (tgt) {
           e.preventDefault()
@@ -425,7 +450,11 @@ export class SelectorPanel {
           pop.pin()
           const action = tgt.dataset.itemAction || ''
           const id = row.dataset.id || ''
-          this.dispatchItemAction(action, id)
+          Promise.resolve(this.dispatchItemAction(action, id)).finally(() => {
+            this.lastActionAt = Date.now()
+            clearTimeout(this.timers.openClose)
+            this.open()
+          })
         }
       })
       pinBtn.addEventListener('click', (e) => { e.stopPropagation(); pop.pin() })
@@ -456,6 +485,10 @@ export class SelectorPanel {
 
   /** Close dropdown */
   close () {
+    if (this.currentPopover && !this.currentPopover.isPinned()) {
+      this.currentPopover.close()
+      this.currentPopover = null
+    }
     if (this.dom.wrap.classList.contains('open')) {
       this.dom.wrap.classList.remove('open')
       this.dom.wrap.dispatchEvent(new CustomEvent('selector:closed', { bubbles: true, composed: true }))
@@ -485,11 +518,12 @@ export class SelectorPanel {
    * Dispatch per-item action
    * @param {string} action The key of the item action.
    * @param {string} id The ID of the item.
+   * @returns {any}
    */
   dispatchItemAction (action, id) {
     const ctx = this.cfg.context ? this.cfg.context() : null
     this.dom.wrap.dispatchEvent(new CustomEvent('selector:item-action', { bubbles: true, composed: true, detail: { action, id, context: ctx } }))
-    if (typeof this.cfg.onItemAction === 'function') this.cfg.onItemAction(action, id, ctx)
+    if (typeof this.cfg.onItemAction === 'function') return this.cfg.onItemAction(action, id, ctx)
   }
 
   /** Unbind all event listeners */

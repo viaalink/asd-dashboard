@@ -13,6 +13,9 @@ declare global {
         shells: any[];
         processes: any[];
       };
+      switchSurface?: (surface: 'boards' | 'network') => void;
+      openInNetwork?: (serviceId: string) => void;
+      commandPalette?: { open: () => void; close: () => void };
     };
     _appLogs?: import('./types.js').LoggerEntry[];
 

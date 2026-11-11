@@ -217,7 +217,7 @@ export class WidgetStore {
 
       const title = document.createElement('h1')
       title.className = 'widget-empty-state-title'
-      title.textContent = 'Acties'
+      title.textContent = 'No widgets on this view'
       empty.appendChild(title)
 
       container.appendChild(empty)

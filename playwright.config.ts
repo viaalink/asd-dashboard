@@ -42,7 +42,7 @@ export default defineConfig({
         size: { width: 1280, height: 720 }
     },
     
-    baseURL: process.env.STAGING === '1' ? 'http://localhost:8000' : 'http://localhost:8000',
+    baseURL: process.env.STAGING === '1' ? `http://localhost:${process.env.PORT || 8000}` : `http://localhost:${process.env.PORT || 8000}`,
   },
 
   /* Configure projects for major browsers */
@@ -72,7 +72,7 @@ export default defineConfig({
   /* Run local dev server before starting the tests */
   webServer: {
     command: 'npm run start', // Adjust this command if necessary
-    url: 'http://127.0.0.1:8000', // Ensure this matches the server URL
+    url: `http://127.0.0.1:${process.env.PORT || 8000}`, // Ensure this matches the server URL
     reuseExistingServer: !process.env.CI,
   },
 });
