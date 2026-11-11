@@ -1,7 +1,7 @@
 // @ts-check
 import { test, expect } from './fixtures'
 import { routeServicesConfig } from './shared/mocking'
-import { clearStorage, navigate } from './shared/common'
+import { clearStorage, getServices, navigate } from './shared/common'
 import { ciConfig } from './data/ciConfig'
 
 const workspaceServices = [
@@ -139,18 +139,39 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     await expect(drawer.locator('[data-testid="shell-ttyd-offline"]')).toBeVisible()
   })
 
-  test('manages workspace hubs via Hub Switcher and loads services from the selected hub', async ({ page }) => {
+  test('manages workspace hubs via Hub Switcher in read-only mode, blocks hostile fallback.url/javascript:, re-syncs on reload, and preserves local data on unreachable hub', async ({ page }) => {
     const stagingServices = [
       {
         id: 'staging-api',
         name: 'Staging Gateway',
         url: 'https://staging.viaalink.dev/api',
         state: 'online',
-        maxInstances: 5
+        maxInstances: 5,
+        fallback: {
+          name: 'Stop Staging Gateway',
+          url: '/asde/terminal/?arg=bash&arg=-c&arg=id'
+        }
+      },
+      {
+        id: 'evil-js',
+        name: 'Hostile Scheme Service',
+        url: 'javascript:window.__pwn=1',
+        state: 'online',
+        maxInstances: 1
+      },
+      {
+        id: 'ttyd',
+        name: 'Remote ttyd',
+        url: 'https://staging.viaalink.dev/asde/terminal/',
+        state: 'online',
+        maxInstances: 1
       }
     ]
     await page.route('https://staging.viaalink.dev/asde/hub-services.json', route =>
       route.fulfill({ json: stagingServices })
+    )
+    await page.route('https://unreachable.viaalink.dev/**', route =>
+      route.abort('failed')
     )
 
     await page.click('[data-testid="hub-switcher"]')
@@ -167,13 +188,54 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     const hubList = page.locator('[data-testid="hub-manager-list"]')
     await expect(hubList).toContainText('staging-eu-hub')
 
-    // Activate staging-eu-hub and verify its services replace the local workspace services in Network topology
+    // Activate staging-eu-hub and verify its services render read-only in Network topology
     await hubList.locator('button:has-text("Activate")').click()
     await page.locator('#hub-manager-modal button:has-text("Close")').click()
 
     await page.click('[data-testid="nav-network"]')
     await expect(page.locator('[data-testid="network-node-staging-api"]')).toBeVisible()
     await expect(page.locator('[data-testid="network-node-service-19876"]')).toHaveCount(0)
+
+    // Verify local StorageManager services were NOT overwritten by the remote hub
+    const storedLocalSvcs = await getServices(page)
+    const storedLocalIds = Array.isArray(storedLocalSvcs) ? storedLocalSvcs.map((s: any) => s.id) : []
+    expect(storedLocalIds).toContain('service-19876')
+    expect(storedLocalIds).not.toContain('staging-api')
+
+    // Verify hostile fallback.url on remote hub shows NO action button and NO iframe
+    await page.click('[data-testid="network-node-staging-api"]')
+    await expect(page.locator('[data-testid="remote-hub-readonly-notice"]')).toBeVisible()
+    await expect(page.locator('[data-testid="drawer-service-action-btn"]')).toHaveCount(0)
+    await expect(page.locator('[data-testid="network-detail-drawer"] iframe')).toHaveCount(0)
+
+    // Verify Shell tab on remote hub shows read-only notice and NO terminal iframe
+    await page.click('[data-testid="drawer-tab-shell"]')
+    await expect(page.locator('[data-testid="shell-remote-readonly"]')).toBeVisible()
+    await expect(page.locator('[data-testid="drawer-shell-iframe"]')).toHaveCount(0)
+
+    // Verify javascript: URL on remote service renders no link
+    await page.click('[data-testid="network-node-evil-js"]')
+    await page.click('[data-testid="drawer-tab-info"]')
+    await expect(page.locator('[data-testid="network-detail-drawer"] a[href^="javascript:"]')).toHaveCount(0)
+
+    // Verify reload re-syncs the selected remote hub on startup
+    await navigate(page, '/?surface=network')
+    await expect(page.locator('[data-testid="hub-switcher"]')).toContainText('staging-eu-hub')
+    await expect(page.locator('[data-testid="network-node-staging-api"]')).toBeVisible()
+
+    // Verify unreachable/CORS-blocked remote hub preserves local services and shows "Hub unreachable"
+    await page.click('[data-testid="hub-switcher"]')
+    await page.click('[data-testid="open-hub-manager"]')
+    await page.fill('[data-testid="hub-input-name"]', 'dead-cors-hub')
+    await page.fill('[data-testid="hub-input-url"]', 'https://unreachable.viaalink.dev')
+    await page.click('[data-testid="hub-add-submit"]')
+    await page.locator('[data-testid="hub-manager-list"] div', { hasText: 'dead-cors-hub' }).locator('button:has-text("Activate")').click()
+    await page.locator('#hub-manager-modal button:has-text("Close")').click()
+
+    await expect(page.locator('[data-testid="hub-unreachable-banner"]')).toBeVisible()
+    const preservedLocalSvcs = await getServices(page)
+    const preservedLocalIds = Array.isArray(preservedLocalSvcs) ? preservedLocalSvcs.map((s: any) => s.id) : []
+    expect(preservedLocalIds).toContain('service-19876')
   })
 
   test('escapes HTML payloads in config_base64 and services_base64 without executing XSS', async ({ page }) => {

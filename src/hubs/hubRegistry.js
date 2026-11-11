@@ -2,6 +2,7 @@
 /**
  * Multi-hub registry and workspace discovery for the Viaalink Dashboard.
  * Persists hubs and the active hub selection via StorageManager.misc.
+ * Remote hubs are strictly read-only: remote services are never written into StorageManager.
  * @module hubs/hubRegistry
  */
 import { StorageManager } from '../storage/StorageManager.js'
@@ -11,7 +12,9 @@ const logger = new Logger('hubRegistry.js')
 
 const HUBS_KEY = 'hubs.v2'
 const ACTIVE_HUB_KEY = 'activeHub.v2'
-const LOCAL_SERVICES_BACKUP_KEY = 'localServicesBackup.v2'
+
+/** @type {Record<string, {services: Array<any>, unreachable: boolean}>} */
+const remoteHubCache = {}
 
 /**
  * @typedef {Object} HubEntry
@@ -43,6 +46,39 @@ export function sanitizeHubUrl (rawUrl) {
     return parsed.origin + parsed.pathname.replace(/\/+$/, '')
   } catch {
     return null
+  }
+}
+
+/**
+ * Validate a service or action URL.
+ * Allows absolute http(s) URLs, and optionally same-origin relative URLs starting with single `/`.
+ * Rejects `javascript:`, `data:`, `file:`, protocol-relative `//`, and any other scheme.
+ * @function sanitizeSafeUrl
+ * @param {any} rawUrl
+ * @param {{allowRelative?: boolean}} [opts]
+ * @returns {string}
+ */
+export function sanitizeSafeUrl (rawUrl, opts = {}) {
+  if (typeof rawUrl !== 'string') return ''
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return ''
+  const allowRelative = opts.allowRelative !== false
+  try {
+    if (trimmed.startsWith('/')) {
+      if (trimmed.startsWith('//') || !allowRelative) return ''
+      const origin = typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'http://localhost:8000'
+      const parsed = new URL(trimmed, origin)
+      if (parsed.origin !== origin) return ''
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+      return parsed.pathname + parsed.search + parsed.hash
+    }
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
+    return parsed.href
+  } catch {
+    return ''
   }
 }
 
@@ -80,11 +116,7 @@ export function buildDefaultLocalHub () {
   const name = cfg?.branding?.workspaceName ||
     cfg?.projectName ||
     (isTunnel ? host.split('.')[0] : 'local-workspace')
-  const activeId = StorageManager.misc.getItem(ACTIVE_HUB_KEY)
-  const backupSvcs = StorageManager.misc.getItem(LOCAL_SERVICES_BACKUP_KEY)
-  const counts = (activeId && activeId !== 'hub-local' && Array.isArray(backupSvcs))
-    ? computeLocalServiceCounts(backupSvcs)
-    : computeLocalServiceCounts()
+  const counts = computeLocalServiceCounts()
   return {
     id: 'hub-local',
     name: String(name || 'local-workspace'),
@@ -167,14 +199,104 @@ export function getActiveHub () {
 }
 
 /**
- * Fetch and apply services from the given hub's endpoint.
+ * Return true when a non-local remote hub is currently selected.
+ * @function isRemoteHubActive
+ * @returns {boolean}
+ */
+export function isRemoteHubActive () {
+  return getActiveHubId() !== 'hub-local'
+}
+
+/**
+ * Return true when the currently selected remote hub failed its last fetch (CORS/offline).
+ * @function isActiveHubUnreachable
+ * @returns {boolean}
+ */
+export function isActiveHubUnreachable () {
+  const id = getActiveHubId()
+  if (id === 'hub-local') return false
+  return Boolean(remoteHubCache[id]?.unreachable)
+}
+
+/**
+ * Sanitize a list of services for topology rendering.
+ * Remote hub services are strictly read-only (no fallback actions, no relative URLs, never stored in StorageManager).
+ * Local services allow same-origin relative URLs and http(s) URLs, rejecting `javascript:` and other schemes.
+ * @function sanitizeTopologyServices
+ * @param {Array<any>} rawList
+ * @param {boolean} isRemote
+ * @returns {Array<any>}
+ */
+export function sanitizeTopologyServices (rawList, isRemote) {
+  if (!Array.isArray(rawList)) return []
+  return rawList
+    .filter(s => s && typeof s === 'object' && (s.id || s.name))
+    .map(s => {
+      const safeUrl = sanitizeSafeUrl(s.url, { allowRelative: !isRemote })
+      if (isRemote) {
+        return {
+          id: String(s.id || s.name),
+          name: String(s.name || s.id),
+          state: String(s.state || 'online'),
+          port: typeof s.port === 'number' ? s.port : undefined,
+          url: safeUrl,
+          fallback: null,
+          __readOnlyRemote: true
+        }
+      }
+      const rawFallbackUrl = s.fallback && typeof s.fallback === 'object' ? sanitizeSafeUrl(s.fallback.url, { allowRelative: true }) : ''
+      return {
+        ...s,
+        url: safeUrl,
+        fallback: rawFallbackUrl
+          ? { ...s.fallback, url: rawFallbackUrl }
+          : null
+      }
+    })
+}
+
+/**
+ * Get the services list for the currently active hub without mutating StorageManager.
+ * @function getActiveTopologyServices
+ * @returns {Array<any>}
+ */
+export function getActiveTopologyServices () {
+  const activeId = getActiveHubId()
+  if (activeId === 'hub-local') {
+    return sanitizeTopologyServices(StorageManager.getServices() || [], false)
+  }
+  return remoteHubCache[activeId]?.services || []
+}
+
+/**
+ * Fetch and cache read-only service status/counts/links from the given hub's endpoint.
+ * Never writes remote services into StorageManager, preserving local workspace services.
  * @function syncServicesFromHub
  * @param {HubEntry} hub
  * @returns {Promise<Array<any>>}
  */
 export async function syncServicesFromHub (hub) {
   if (!hub) return []
-  const baseUrl = (sanitizeHubUrl(hub.url) || hub.url).replace(/\/+$/, '')
+  if (hub.id === 'hub-local') {
+    const localSvcs = sanitizeTopologyServices(StorageManager.getServices() || [], false)
+    const counts = computeLocalServiceCounts(localSvcs)
+    upsertHub({ ...hub, ...counts })
+    if (typeof document !== 'undefined') {
+      document.dispatchEvent(new CustomEvent('services-updated'))
+    }
+    return localSvcs
+  }
+
+  const baseUrl = sanitizeHubUrl(hub.url)
+  if (!baseUrl) {
+    remoteHubCache[hub.id] = { services: [], unreachable: true }
+    upsertHub({ ...hub, status: 'offline', servicesUp: 0, servicesTotal: 0 })
+    if (typeof document !== 'undefined') {
+      document.dispatchEvent(new CustomEvent('services-updated'))
+    }
+    return []
+  }
+
   const urlsToTry = [`${baseUrl}/asde/hub-services.json`, `${baseUrl}/services.json`]
   for (const endpoint of urlsToTry) {
     try {
@@ -182,13 +304,14 @@ export async function syncServicesFromHub (hub) {
       if (res.ok) {
         const svcs = await res.json()
         if (Array.isArray(svcs)) {
-          StorageManager.setServices(svcs)
-          const counts = computeLocalServiceCounts(svcs)
+          const readOnlySvcs = sanitizeTopologyServices(svcs, true)
+          remoteHubCache[hub.id] = { services: readOnlySvcs, unreachable: false }
+          const counts = computeLocalServiceCounts(readOnlySvcs)
           upsertHub({ ...hub, ...counts })
           if (typeof document !== 'undefined') {
             document.dispatchEvent(new CustomEvent('services-updated'))
           }
-          return svcs
+          return readOnlySvcs
         }
       }
     } catch (err) {
@@ -196,19 +319,8 @@ export async function syncServicesFromHub (hub) {
     }
   }
 
-  if (hub.id === 'hub-local') {
-    const backup = StorageManager.misc.getItem(LOCAL_SERVICES_BACKUP_KEY)
-    if (Array.isArray(backup)) {
-      StorageManager.setServices(backup)
-      if (typeof document !== 'undefined') {
-        document.dispatchEvent(new CustomEvent('services-updated'))
-      }
-      return backup
-    }
-  }
-
-  // Remote hub unreachable or returned no valid services array: reflect empty/offline state honestly
-  StorageManager.setServices([])
+  // Remote hub unreachable (e.g. CORS or network failure): keep local StorageManager data intact and flag unreachable
+  remoteHubCache[hub.id] = { services: [], unreachable: true }
   upsertHub({ ...hub, status: 'offline', servicesUp: 0, servicesTotal: 0 })
   if (typeof document !== 'undefined') {
     document.dispatchEvent(new CustomEvent('services-updated'))
@@ -217,18 +329,14 @@ export async function syncServicesFromHub (hub) {
 }
 
 /**
- * Set the active hub by ID and load its services into the workspace.
+ * Set the active hub by ID and synchronize its read-only topology state.
  * @function setActiveHubId
  * @param {string} id
  * @returns {HubEntry}
  */
 export function setActiveHubId (id) {
-  const prevId = getActiveHubId()
   const hubs = getHubs()
   const target = hubs.find(h => h.id === id) || hubs[0] || buildDefaultLocalHub()
-  if (prevId === 'hub-local' && target.id !== 'hub-local') {
-    StorageManager.misc.setItem(LOCAL_SERVICES_BACKUP_KEY, StorageManager.getServices() || [])
-  }
   StorageManager.misc.setItem(ACTIVE_HUB_KEY, target.id)
   logger.log(`Switched active hub to ${target.name} (${target.id})`)
   emitHubsChanged()
@@ -277,6 +385,7 @@ export function upsertHub (input) {
  */
 export function removeHub (id) {
   if (!id || id === 'hub-local') return false
+  delete remoteHubCache[id]
   const hubs = getHubs()
   const next = hubs.filter(h => h.id !== id)
   saveHubs(next)
@@ -303,17 +412,20 @@ export async function probeHubHealth (id) {
     return updated
   }
   try {
-    const baseUrl = (sanitizeHubUrl(hub.url) || hub.url).replace(/\/+$/, '')
+    const baseUrl = sanitizeHubUrl(hub.url)
+    if (!baseUrl) throw new Error('Invalid hub URL')
     const res = await fetch(`${baseUrl}/asde/hub-services.json`, { cache: 'no-store', credentials: 'omit' })
     if (res.ok) {
       const svcs = await res.json()
       if (Array.isArray(svcs)) {
-        const up = svcs.filter(s => String(s?.state || 'online').toLowerCase() !== 'offline').length
+        const readOnlySvcs = sanitizeTopologyServices(svcs, true)
+        remoteHubCache[id] = { services: readOnlySvcs, unreachable: false }
+        const up = readOnlySvcs.filter(s => String(s?.state || 'online').toLowerCase() !== 'offline').length
         const updated = {
           ...hub,
-          status: /** @type {'online'|'degraded'|'offline'} */ (up === svcs.length ? 'online' : up > 0 ? 'degraded' : 'offline'),
+          status: /** @type {'online'|'degraded'|'offline'} */ (up === readOnlySvcs.length ? 'online' : up > 0 ? 'degraded' : 'offline'),
           servicesUp: up,
-          servicesTotal: svcs.length
+          servicesTotal: readOnlySvcs.length
         }
         upsertHub(updated)
         return updated
@@ -324,6 +436,7 @@ export async function probeHubHealth (id) {
     return updated
   } catch (err) {
     logger.warn('Hub probe failed:', err)
+    remoteHubCache[id] = { services: [], unreachable: true }
     const updated = { ...hub, status: /** @type {'online'|'degraded'|'offline'} */ ('offline') }
     upsertHub(updated)
     return updated

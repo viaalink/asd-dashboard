@@ -26,6 +26,7 @@ import { initThemeFromConfig } from './ui/theme.js'
 import { mountServiceControl } from './component/service/ServiceControl.js'
 import { mountRuntimeControl } from './component/runtime/RuntimeControl.js'
 import { mountHubSwitcher } from './hubs/HubSwitcher.js'
+import { getActiveHub, isRemoteHubActive, syncServicesFromHub } from './hubs/hubRegistry.js'
 import { mountNetworkView } from './views/network/NetworkView.js'
 import { mountCommandPalette } from './component/palette/CommandPalette.js'
 
@@ -215,8 +216,12 @@ async function main () {
   }
 
   // Initial service and hub population (after services & boards)
+  if (isRemoteHubActive()) {
+    await syncServicesFromHub(getActiveHub()).catch(err => logger.warn('Initial remote hub sync failed:', err))
+  }
   servicePanel?.refresh()
   hubSwitcher?.refresh()
+  networkView?.refresh()
 
   // Honor ?surface=network, ?focus=<serviceId>, or saved activeSurface
   const focusId = params.get('focus')
@@ -226,7 +231,6 @@ async function main () {
     openInNetwork(focusId)
   } else if (requestedSurface === 'network' || (!requestedSurface && savedSurface === 'network')) {
     switchPrimarySurface('network')
-    networkView?.refresh()
   } else {
     switchPrimarySurface('boards')
   }

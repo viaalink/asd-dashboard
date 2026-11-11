@@ -18,7 +18,13 @@ import { getCurrentBoardId, getCurrentViewId } from '../../utils/elements.js'
 import { resolveServiceConfig, serviceLimitKey } from '../../utils/serviceUtils.js'
 import { showNotification } from '../../component/dialog/notification.js'
 import { openModal } from '../../component/modal/modalFactory.js'
-import { getActiveHub } from '../../hubs/hubRegistry.js'
+import {
+  getActiveHub,
+  getActiveTopologyServices,
+  isRemoteHubActive,
+  isActiveHubUnreachable,
+  sanitizeSafeUrl
+} from '../../hubs/hubRegistry.js'
 
 const HIDDEN_NODES_KEY = 'networkHiddenNodes.v2'
 const STICKIES_KEY = 'networkStickies.v2'
@@ -593,10 +599,13 @@ export function mountNetworkView (opts = {}) {
    * @returns {{nodes: import('./topologyBuilder.js').TopologyNode[], edges: import('./topologyBuilder.js').TopologyEdge[], ttydOnline: boolean}}
    */
   function getFullGraph () {
-    const rawServices = StorageManager.getServices() || []
+    const rawServices = getActiveTopologyServices()
     const hiddenIds = loadHiddenNodeIds()
     const posMap = loadNodePositions()
     const base = buildWorkspaceTopology(rawServices, hiddenIds, posMap)
+    if (isRemoteHubActive()) {
+      base.ttydOnline = false
+    }
 
     // Apply custom edges
     const customEdges = loadCustomEdges().filter(ce => !hiddenIds.has(ce.from) && !hiddenIds.has(ce.to))
@@ -826,16 +835,19 @@ export function mountNetworkView (opts = {}) {
         hdr.appendChild(closeBtn)
         modal.appendChild(hdr)
 
-        if (!ttydOnline) {
+        if (!ttydOnline || isRemoteHubActive()) {
           const offlineNotice = document.createElement('div')
           offlineNotice.className = 'ttyd-offline-banner'
-          offlineNotice.innerHTML = '<strong>Web Terminal (ttyd) is offline</strong><span>Start the workspace ttyd service to open an interactive terminal session.</span>'
+          offlineNotice.innerHTML = isRemoteHubActive()
+            ? '<strong>Remote hub is read-only</strong><span>Interactive terminal sessions are disabled when viewing a remote hub.</span>'
+            : '<strong>Web Terminal (ttyd) is offline</strong><span>Start the workspace ttyd service to open an interactive terminal session.</span>'
           modal.appendChild(offlineNotice)
           return
         }
 
+        const safeTtydUrl = sanitizeSafeUrl(ttydUrl, { allowRelative: true }) || '/asde/terminal/'
         const iframe = document.createElement('iframe')
-        iframe.src = ttydUrl || '/asde/terminal/'
+        iframe.src = safeTtydUrl
         iframe.style.width = '100%'
         iframe.style.height = '420px'
         iframe.style.border = '1px solid var(--line)'
@@ -898,9 +910,10 @@ export function mountNetworkView (opts = {}) {
         frameWrap.style.overflow = 'hidden'
         frameWrap.style.background = 'var(--bg-1)'
 
-        if (node.url && node.state === 'online') {
+        const safeNodeUrl = !isRemoteHubActive() ? sanitizeSafeUrl(node.url, { allowRelative: true }) : ''
+        if (safeNodeUrl && node.state === 'online') {
           const iframe = document.createElement('iframe')
-          iframe.src = node.url
+          iframe.src = safeNodeUrl
           iframe.style.width = '100%'
           iframe.style.height = '100%'
           iframe.style.border = 'none'
@@ -1174,13 +1187,15 @@ export function mountNetworkView (opts = {}) {
     // CASE 3: Nothing selected -> MapOverview
     if (!selectedNode) {
       const activeHub = getActiveHub()
+      const remoteMode = isRemoteHubActive()
+      const hubUnreachable = isActiveHubUnreachable()
       const header = document.createElement('div')
       header.className = 'drawer-header'
       header.innerHTML = `
         <div class="drawer-title-group">
           <div class="drawer-title-row">
             <span data-testid="drawer-node-title">Network Topology</span>
-            <span class="asd-pill ok">live</span>
+            <span class="asd-pill ${hubUnreachable ? 'err' : (remoteMode ? 'warn' : 'ok')}">${hubUnreachable ? 'unreachable' : (remoteMode ? 'read-only' : 'live')}</span>
           </div>
           <div class="drawer-subtitle">Hub: ${escapeHtml(activeHub.name)}</div>
         </div>
@@ -1189,6 +1204,19 @@ export function mountNetworkView (opts = {}) {
 
       const content = document.createElement('div')
       content.className = 'drawer-content'
+      if (hubUnreachable) {
+        const unreachBanner = document.createElement('div')
+        unreachBanner.className = 'ttyd-offline-banner'
+        unreachBanner.dataset.testid = 'hub-unreachable-banner'
+        unreachBanner.innerHTML = `<strong>Hub unreachable (${escapeHtml(activeHub.name)})</strong><span>Could not fetch remote services (CORS or offline). Local workspace services are preserved.</span>`
+        content.appendChild(unreachBanner)
+      } else if (remoteMode) {
+        const roBanner = document.createElement('div')
+        roBanner.className = 'ttyd-offline-banner'
+        roBanner.dataset.testid = 'remote-hub-readonly-banner'
+        roBanner.innerHTML = `<strong>Read-only remote hub (${escapeHtml(activeHub.name)})</strong><span>Showing service counts, status, and external http(s) links only. Terminal and local actions are disabled.</span>`
+        content.appendChild(roBanner)
+      }
       const onlineCount = graph.nodes.filter(n => !n.isSynthetic && n.state === 'online').length
       const totalCount = graph.nodes.filter(n => !n.isSynthetic).length
 
@@ -1329,74 +1357,97 @@ export function mountNetworkView (opts = {}) {
       const actionsStack = document.createElement('div')
       actionsStack.className = 'drawer-actions-stack'
 
-      if (!node.isSynthetic) {
-        if (!graph.ttydOnline) {
-          const notice = document.createElement('div')
-          notice.className = 'ttyd-offline-banner'
-          notice.dataset.testid = 'ttyd-offline-notice'
-          notice.innerHTML = '<strong>Web Terminal (ttyd) is offline</strong><span>Service start/stop actions run in an interactive ttyd terminal session and are disabled until ttyd is online.</span>'
-          actionsStack.appendChild(notice)
+      const remoteMode = isRemoteHubActive()
+
+      if (remoteMode) {
+        const roNotice = document.createElement('div')
+        roNotice.className = 'ttyd-offline-banner'
+        roNotice.dataset.testid = 'remote-hub-readonly-notice'
+        roNotice.innerHTML = '<strong>Read-only remote hub</strong><span>Service start/stop actions, iframes, and interactive terminal sessions are disabled for remote hubs.</span>'
+        actionsStack.appendChild(roNotice)
+
+        const safeRemoteUrl = sanitizeSafeUrl(node.url, { allowRelative: false })
+        if (safeRemoteUrl) {
+          const extLink = document.createElement('a')
+          extLink.href = safeRemoteUrl
+          extLink.target = '_blank'
+          extLink.rel = 'noopener noreferrer'
+          extLink.className = 'asd-btn'
+          extLink.style.textDecoration = 'none'
+          extLink.textContent = '↗ Open Endpoint in New Tab'
+          actionsStack.appendChild(extLink)
+        }
+      } else {
+        if (!node.isSynthetic) {
+          if (!graph.ttydOnline) {
+            const notice = document.createElement('div')
+            notice.className = 'ttyd-offline-banner'
+            notice.dataset.testid = 'ttyd-offline-notice'
+            notice.innerHTML = '<strong>Web Terminal (ttyd) is offline</strong><span>Service start/stop actions run in an interactive ttyd terminal session and are disabled until ttyd is online.</span>'
+            actionsStack.appendChild(notice)
+          }
+
+          // Only render a service start/stop button when the CLI provides an explicit safe action URL (fallback.url)
+          const actionUrl = sanitizeSafeUrl(node.fallback?.url, { allowRelative: true })
+          if (actionUrl) {
+            const taskBtn = document.createElement('button')
+            taskBtn.type = 'button'
+            const actionName = node.fallback?.name || (node.state === 'offline' ? `Start ${node.label}` : `Stop ${node.label}`)
+            taskBtn.className = `asd-btn ${node.state === 'offline' ? 'ok' : 'primary'}`
+            taskBtn.dataset.testid = 'drawer-service-action-btn'
+            taskBtn.textContent = actionName
+            taskBtn.disabled = !graph.ttydOnline
+            taskBtn.addEventListener('click', () => {
+              showServiceModal(
+                { id: node.id, name: `${node.label} (${actionName})`, url: actionUrl },
+                null,
+                { onDone: () => refresh() }
+              )
+            })
+            actionsStack.appendChild(taskBtn)
+          }
+
+          const popWidgetBtn = document.createElement('button')
+          popWidgetBtn.type = 'button'
+          popWidgetBtn.className = 'asd-btn sm'
+          popWidgetBtn.textContent = '⤢ Pop out Widget'
+          popWidgetBtn.addEventListener('click', () => openWidgetPopoutModal(node))
+          actionsStack.appendChild(popWidgetBtn)
         }
 
-        // Only render a service start/stop button when the CLI provides an explicit action URL (fallback.url)
-        const actionUrl = node.fallback?.url || ''
-        if (actionUrl) {
-          const taskBtn = document.createElement('button')
-          taskBtn.type = 'button'
-          const actionName = node.fallback?.name || (node.state === 'offline' ? `Start ${node.label}` : `Stop ${node.label}`)
-          taskBtn.className = `asd-btn ${node.state === 'offline' ? 'ok' : 'primary'}`
-          taskBtn.dataset.testid = 'drawer-service-action-btn'
-          taskBtn.textContent = actionName
-          taskBtn.disabled = !graph.ttydOnline
-          taskBtn.addEventListener('click', () => {
-            showServiceModal(
-              { id: node.id, name: `${node.label} (${actionName})`, url: actionUrl },
-              null,
-              { onDone: () => refresh() }
-            )
+        const safeLocalUrl = sanitizeSafeUrl(node.url, { allowRelative: true })
+        if (node.rawService && safeLocalUrl) {
+          const addBoardBtn = document.createElement('button')
+          addBoardBtn.type = 'button'
+          addBoardBtn.className = 'asd-btn'
+          addBoardBtn.dataset.testid = 'drawer-add-widget'
+          addBoardBtn.textContent = '+ Open as Widget on Board'
+          addBoardBtn.addEventListener('click', async () => {
+            const resolved = resolveServiceConfig(node.rawService)
+            const location = findServiceLocation(serviceLimitKey(resolved))
+            if (location && typeof resolved.maxInstances === 'number' && resolved.maxInstances <= 1) {
+              await switchBoard(location.boardId, location.viewId)
+            } else {
+              await addWidget(safeLocalUrl, undefined, undefined, 'iframe', getCurrentBoardId(), getCurrentViewId())
+            }
+            if (typeof opts.onSwitchToBoards === 'function') {
+              opts.onSwitchToBoards()
+            }
+            showNotification(`Opened "${node.label}" on board`, 2200, 'success')
           })
-          actionsStack.appendChild(taskBtn)
+          actionsStack.appendChild(addBoardBtn)
         }
 
-        const popWidgetBtn = document.createElement('button')
-        popWidgetBtn.type = 'button'
-        popWidgetBtn.className = 'asd-btn sm'
-        popWidgetBtn.textContent = '⤢ Pop out Widget'
-        popWidgetBtn.addEventListener('click', () => openWidgetPopoutModal(node))
-        actionsStack.appendChild(popWidgetBtn)
-      }
-
-      if (node.rawService && node.url) {
-        const addBoardBtn = document.createElement('button')
-        addBoardBtn.type = 'button'
-        addBoardBtn.className = 'asd-btn'
-        addBoardBtn.dataset.testid = 'drawer-add-widget'
-        addBoardBtn.textContent = '+ Open as Widget on Board'
-        addBoardBtn.addEventListener('click', async () => {
-          const resolved = resolveServiceConfig(node.rawService)
-          const location = findServiceLocation(serviceLimitKey(resolved))
-          if (location && typeof resolved.maxInstances === 'number' && resolved.maxInstances <= 1) {
-            await switchBoard(location.boardId, location.viewId)
-          } else {
-            await addWidget(resolved.url, undefined, undefined, 'iframe', getCurrentBoardId(), getCurrentViewId())
-          }
-          if (typeof opts.onSwitchToBoards === 'function') {
-            opts.onSwitchToBoards()
-          }
-          showNotification(`Opened "${node.label}" on board`, 2200, 'success')
-        })
-        actionsStack.appendChild(addBoardBtn)
-      }
-
-      if (node.url) {
-        const extLink = document.createElement('a')
-        extLink.href = node.url
-        extLink.target = '_blank'
-        extLink.rel = 'noopener noreferrer'
-        extLink.className = 'asd-btn'
-        extLink.style.textDecoration = 'none'
-        extLink.textContent = '↗ Open Endpoint in New Tab'
-        actionsStack.appendChild(extLink)
+        if (safeLocalUrl) {
+          const extLink = document.createElement('a')
+          extLink.href = safeLocalUrl
+          extLink.target = '_blank'
+          extLink.rel = 'noopener noreferrer'
+          extLink.className = 'asd-btn'
+          extLink.style.textDecoration = 'none'
+          extLink.textContent = '↗ Open Endpoint in New Tab'
+          actionsStack.appendChild(extLink)
+        }
       }
 
       // Visibility section
@@ -1429,37 +1480,44 @@ export function mountNetworkView (opts = {}) {
       const logBox = document.createElement('div')
       logBox.className = 'drawer-log-box'
       logBox.dataset.testid = 'drawer-log-box'
-      logBox.textContent = `Fetching live logs for ${node.id} from /asde/mcp/api/logs/${node.id}…`
-      content.appendChild(logBox)
+      if (isRemoteHubActive()) {
+        logBox.textContent = 'Remote hub is read-only — live log streaming is only available on the local workspace hub.'
+        content.appendChild(logBox)
+      } else {
+        logBox.textContent = `Fetching live logs for ${node.id} from /asde/mcp/api/logs/${node.id}…`
+        content.appendChild(logBox)
 
-      const ctrl = new AbortController()
-      state.logAbort = ctrl
-      fetch(`/asde/mcp/api/logs/${encodeURIComponent(node.id)}?tail=80`, {
-        signal: ctrl.signal,
-        headers: { accept: 'text/plain, text/event-stream, application/json' }
-      })
-        .then(async (res) => {
-          if (!res.ok) {
-            logBox.textContent = `Live log stream unavailable (/asde/mcp/api/logs/${node.id} returned HTTP ${res.status}).`
-            return
-          }
-          const text = await res.text()
-          logBox.textContent = text.trim() || `No log entries returned for ${node.id}.`
+        const ctrl = new AbortController()
+        state.logAbort = ctrl
+        fetch(`/asde/mcp/api/logs/${encodeURIComponent(node.id)}?tail=80`, {
+          signal: ctrl.signal,
+          headers: { accept: 'text/plain, text/event-stream, application/json' }
         })
-        .catch((err) => {
-          if (err?.name === 'AbortError') return
-          logBox.textContent = `Live log stream unavailable (/asde/mcp/api/logs/${node.id} is offline or unreachable).`
-        })
+          .then(async (res) => {
+            if (!res.ok) {
+              logBox.textContent = `Live log stream unavailable (/asde/mcp/api/logs/${node.id} returned HTTP ${res.status}).`
+              return
+            }
+            const text = await res.text()
+            logBox.textContent = text.trim() || `No log entries returned for ${node.id}.`
+          })
+          .catch((err) => {
+            if (err?.name === 'AbortError') return
+            logBox.textContent = `Live log stream unavailable (/asde/mcp/api/logs/${node.id} is offline or unreachable).`
+          })
+      }
     } else if (state.activeTab === 'shell') {
-      if (!graph.ttydOnline) {
+      if (isRemoteHubActive() || !graph.ttydOnline) {
         const emptyShell = document.createElement('div')
         emptyShell.className = 'ttyd-offline-banner'
-        emptyShell.dataset.testid = 'shell-ttyd-offline'
-        emptyShell.innerHTML = '<strong>Web Terminal (ttyd) is offline</strong><span>Interactive shell sessions require the workspace ttyd daemon to be online.</span>'
+        emptyShell.dataset.testid = isRemoteHubActive() ? 'shell-remote-readonly' : 'shell-ttyd-offline'
+        emptyShell.innerHTML = isRemoteHubActive()
+          ? '<strong>Remote hub is read-only</strong><span>Interactive shell sessions and terminal commands are disabled when viewing a remote hub.</span>'
+          : '<strong>Web Terminal (ttyd) is offline</strong><span>Interactive shell sessions require the workspace ttyd daemon to be online.</span>'
         content.appendChild(emptyShell)
       } else {
         const ttydNode = graph.nodes.find(n => n.isTtyd)
-        const ttydUrl = ttydNode?.url || '/asde/terminal/'
+        const ttydUrl = sanitizeSafeUrl(ttydNode?.url, { allowRelative: true }) || '/asde/terminal/'
 
         const popTtydBtn = document.createElement('button')
         popTtydBtn.type = 'button'
