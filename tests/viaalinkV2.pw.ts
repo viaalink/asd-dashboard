@@ -27,7 +27,7 @@ const workspaceServices = [
     maxInstances: 5,
     fallback: {
       name: 'Stop Service',
-      url: '/asde/terminal/?arg=asd&arg=net&arg=stop&arg=--id%3Dsupabase%3Astudio',
+      url: '/asde/terminal/?arg=via&arg=net&arg=stop&arg=--id%3Dsupabase%3Astudio',
       method: 'GET'
     }
   },
@@ -39,7 +39,7 @@ const workspaceServices = [
     maxInstances: 5,
     fallback: {
       name: 'Start Service',
-      url: '/asde/terminal/?arg=asd&arg=net&arg=start&arg=--id%3Dservice-19876',
+      url: '/asde/terminal/?arg=via&arg=net&arg=start&arg=--id%3Dservice-19876',
       method: 'GET'
     }
   }
@@ -53,7 +53,7 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     await navigate(page, '/')
   })
 
-  test('renders Viaalink brand and switches between Boards and Network views', async ({ page }) => {
+  test('renders Viaalink brand and switches between Boards and Network views without hijacking inputs', async ({ page }) => {
     await expect(page.locator('[data-testid="brand-control"]')).toContainText('Viaalink')
     await expect(page.locator('[data-testid="nav-boards"]')).toHaveClass(/active/)
     await expect(page.locator('main > .board')).toBeVisible()
@@ -65,26 +65,40 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     await expect(page.locator('[data-testid="network-surface"]')).toBeVisible()
     await expect(page.locator('main > .board')).toBeHidden()
 
-    // Switch back to Boards via keyboard shortcut Ctrl+b
-    await page.keyboard.press('Control+b')
+    // Shortcuts must NOT fire while focused inside an input field
+    const searchInput = page.locator('[data-testid="network-search"]')
+    await searchInput.focus()
+    await page.keyboard.press('Alt+b')
+    await expect(page.locator('[data-testid="network-surface"]')).toBeVisible()
+
+    // Blur input and switch back to Boards via keyboard shortcut Alt+b
+    await searchInput.evaluate(el => /** @type {HTMLElement} */ (el).blur())
+    await page.keyboard.press('Alt+b')
     await expect(page.locator('[data-testid="nav-boards"]')).toHaveClass(/active/)
     await expect(page.locator('main > .board')).toBeVisible()
   })
 
-  test('renders workspace services in Network topology and opens node detail drawer', async ({ page }) => {
+  test('renders workspace services in Network topology, omits stop button for ttyd, and launches exact fallback.url', async ({ page }) => {
     await page.click('[data-testid="nav-network"]')
 
+    await expect(page.locator('[data-testid="network-node-ttyd"]')).toBeVisible()
     await expect(page.locator('[data-testid="network-node-supabase:studio"]')).toBeVisible()
     await expect(page.locator('[data-testid="network-node-service-19876"]')).toBeVisible()
     await expect(page.locator('[data-testid="network-ttyd-badge"]')).toHaveText('ttyd: online')
 
-    // Click offline service node to open Detail Drawer
-    await page.click('[data-testid="network-node-service-19876"]')
     const drawer = page.locator('[data-testid="network-detail-drawer"]')
+
+    // Click ttyd node -> CLI omits fallback for ttyd, so no start/stop action button should exist
+    await page.click('[data-testid="network-node-ttyd"]')
+    await expect(drawer.locator('[data-testid="drawer-node-title"]')).toHaveText('ttyd')
+    await expect(drawer.locator('[data-testid="drawer-service-action-btn"]')).toHaveCount(0)
+
+    // Click offline service node that has fallback.url
+    await page.click('[data-testid="network-node-service-19876"]')
     await expect(drawer).toBeVisible()
     await expect(drawer.locator('[data-testid="drawer-node-title"]')).toHaveText('service-19876')
 
-    // Because ttyd is online, Start Service button is enabled and opens the ttyd modal
+    // Because ttyd is online, Start Service button is enabled and opens the modal with exact fallback.url
     const actionBtn = drawer.locator('[data-testid="drawer-service-action-btn"]')
     await expect(actionBtn).toBeEnabled()
     await expect(actionBtn).toHaveText('Start Service')
@@ -94,6 +108,8 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     )
     await actionBtn.click()
     await expect(page.locator('.service-action-modal')).toBeVisible()
+    const iframeSrc = await page.locator('.service-action-iframe').getAttribute('src')
+    expect(iframeSrc).toContain('/asde/terminal/?arg=via&arg=net&arg=start&arg=--id%3Dservice-19876')
     await page.click('.service-action-btn-secondary') // Minimize
 
     // Local reversible Hide from map & Restore
@@ -123,7 +139,20 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     await expect(drawer.locator('[data-testid="shell-ttyd-offline"]')).toBeVisible()
   })
 
-  test('manages workspace hubs via Hub Switcher and Hub Manager modal', async ({ page }) => {
+  test('manages workspace hubs via Hub Switcher and loads services from the selected hub', async ({ page }) => {
+    const stagingServices = [
+      {
+        id: 'staging-api',
+        name: 'Staging Gateway',
+        url: 'https://staging.viaalink.dev/api',
+        state: 'online',
+        maxInstances: 5
+      }
+    ]
+    await page.route('https://staging.viaalink.dev/asde/hub-services.json', route =>
+      route.fulfill({ json: stagingServices })
+    )
+
     await page.click('[data-testid="hub-switcher"]')
     await expect(page.locator('[data-testid="hub-switcher-popover"]')).toBeVisible()
 
@@ -135,7 +164,45 @@ test.describe('Viaalink Dashboard v2 — Surface Switcher, Network Topology, Hub
     await page.selectOption('[data-testid="hub-input-env"]', 'staging')
     await page.click('[data-testid="hub-add-submit"]')
 
-    await expect(page.locator('[data-testid="hub-manager-list"]')).toContainText('staging-eu-hub')
+    const hubList = page.locator('[data-testid="hub-manager-list"]')
+    await expect(hubList).toContainText('staging-eu-hub')
+
+    // Activate staging-eu-hub and verify its services replace the local workspace services in Network topology
+    await hubList.locator('button:has-text("Activate")').click()
+    await page.locator('#hub-manager-modal button:has-text("Close")').click()
+
+    await page.click('[data-testid="nav-network"]')
+    await expect(page.locator('[data-testid="network-node-staging-api"]')).toBeVisible()
+    await expect(page.locator('[data-testid="network-node-service-19876"]')).toHaveCount(0)
+  })
+
+  test('escapes HTML payloads in config_base64 and services_base64 without executing XSS', async ({ page }) => {
+    const xssConfig = {
+      ...ciConfig,
+      projectName: '<img src=x onerror="window.__xssConfig=1">'
+    }
+    const xssServices = [
+      {
+        id: 'xss-svc',
+        name: '<img src=x onerror="window.__xssService=1">',
+        url: 'http://localhost:9999',
+        state: 'online',
+        maxInstances: 5
+      }
+    ]
+    const cfgB64 = Buffer.from(JSON.stringify(xssConfig), 'utf8').toString('base64')
+    const svcB64 = Buffer.from(JSON.stringify(xssServices), 'utf8').toString('base64')
+
+    await clearStorage(page)
+    await navigate(page, `/?surface=network&config_base64=${encodeURIComponent(cfgB64)}&services_base64=${encodeURIComponent(svcB64)}`)
+
+    await expect(page.locator('[data-testid="network-detail-drawer"]')).toContainText('<img src=x onerror="window.__xssConfig=1">')
+    await page.click('[data-testid="network-node-xss-svc"]')
+    await expect(page.locator('[data-testid="drawer-node-title"]')).toHaveText('<img src=x onerror="window.__xssService=1">')
+
+    const xssTriggered = await page.evaluate(() => Boolean((window as any).__xssConfig || (window as any).__xssService))
+    expect(xssTriggered).toBe(false)
+    await expect(page.locator('[data-testid="network-detail-drawer"] img')).toHaveCount(0)
   })
 
   test('opens Command Palette (⌘K) and navigates to Network node', async ({ page }) => {

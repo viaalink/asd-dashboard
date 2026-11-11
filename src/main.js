@@ -141,7 +141,7 @@ async function main () {
   window.asd.openInNetwork = openInNetwork
   window.asd.commandPalette = commandPalette
 
-  // Bind primary surface buttons & keyboard shortcuts (⌘B, ⌘N, ⌘K)
+  // Bind primary surface buttons & keyboard shortcuts (Alt+B, Alt+N, Alt+K / ⌘K outside inputs)
   document.getElementById('nav-boards')?.addEventListener('click', () => switchPrimarySurface('boards'))
   document.getElementById('nav-network')?.addEventListener('click', () => {
     switchPrimarySurface('network')
@@ -149,18 +149,23 @@ async function main () {
   })
 
   document.addEventListener('keydown', (e) => {
-    if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+    const tgt = /** @type {HTMLElement|null} */ (e.target instanceof HTMLElement ? e.target : null)
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.tagName === 'SELECT' || tgt.isContentEditable)) {
+      return
+    }
     const key = e.key.toLowerCase()
-    if (key === 'k') {
-      e.preventDefault()
-      commandPalette.open()
-    } else if (key === 'b') {
-      e.preventDefault()
-      switchPrimarySurface('boards')
-    } else if (key === 'n') {
-      e.preventDefault()
-      switchPrimarySurface('network')
-      networkView?.refresh()
+    if ((e.altKey && !e.ctrlKey && !e.metaKey) || (e.metaKey && !e.ctrlKey && !e.altKey)) {
+      if (key === 'k') {
+        e.preventDefault()
+        commandPalette.open()
+      } else if (key === 'b') {
+        e.preventDefault()
+        switchPrimarySurface('boards')
+      } else if (key === 'n') {
+        e.preventDefault()
+        switchPrimarySurface('network')
+        networkView?.refresh()
+      }
     }
   })
 
@@ -180,24 +185,6 @@ async function main () {
   }
 
   // 4. Apply settings that depend on the loaded config
-  // Bind unlinked /asde/terminal widgets to ttyd service when present so defaultService limit(1) isn't triggered
-  const loadedServices = StorageManager.getServices() || []
-  if (loadedServices.some(s => s?.id === 'ttyd') && Array.isArray(config?.boards)) {
-    let patched = false
-    for (const b of config.boards) {
-      for (const v of (b.views || [])) {
-        for (const w of (v.widgetState || [])) {
-          if (!w.serviceId && typeof w.url === 'string' && w.url.includes('/asde/terminal')) {
-            w.serviceId = 'ttyd'
-            patched = true
-          }
-        }
-      }
-    }
-    if (patched) {
-      StorageManager.setConfig(config)
-    }
-  }
   initThemeFromConfig(config)
   applyControlVisibility()
   applyWidgetMenuVisibility()
@@ -231,12 +218,13 @@ async function main () {
   servicePanel?.refresh()
   hubSwitcher?.refresh()
 
-  // Honor ?surface=network or ?focus=<serviceId> deep links
+  // Honor ?surface=network, ?focus=<serviceId>, or saved activeSurface
   const focusId = params.get('focus')
   const requestedSurface = params.get('surface')
+  const savedSurface = StorageManager.misc.getItem('activeSurface')
   if (focusId) {
     openInNetwork(focusId)
-  } else if (requestedSurface === 'network') {
+  } else if (requestedSurface === 'network' || (!requestedSurface && savedSurface === 'network')) {
     switchPrimarySurface('network')
     networkView?.refresh()
   } else {
@@ -266,7 +254,6 @@ async function main () {
         servicePanel?.refresh()
         runtimePanel?.refresh()
         hubSwitcher?.refresh()
-        if (document.body.dataset.surface === 'network') networkView?.refresh()
         break
 
       case 'services':
@@ -274,7 +261,6 @@ async function main () {
         servicePanel?.refresh()
         runtimePanel?.refresh()
         hubSwitcher?.refresh()
-        if (document.body.dataset.surface === 'network') networkView?.refresh()
         break
     }
   }

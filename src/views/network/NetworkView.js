@@ -3,10 +3,10 @@
  * Interactive Network & Workspace Service Topology view for Viaalink Dashboard.
  * Implements the Claude Design SystemMap & Popouts specification:
  * - Draggable color-coded SVG nodes with right-hand connection handles
- * - Interactive edge drawing, route labels, and mitmproxy edge injection with live flow animation
+ * - Interactive edge drawing, route labels, and route inspection annotations
  * - Sticky notes (seeded + user-created, draggable & editable)
  * - Always-visible right Detail Drawer (MapOverview, NodeDetail 4 tabs, EdgeDetail, NoteDetail)
- * - Popout modals: TtydPopout, WidgetPopout (with minimize pill), ShutdownDialog, and GapAnalysis table
+ * - Popout modals: TtydPopout, WidgetPopout (with minimize pill), and GapAnalysis table
  * @module views/network/NetworkView
  */
 import { StorageManager } from '../../storage/StorageManager.js'
@@ -28,64 +28,79 @@ const INJECTED_MITM_KEY = 'networkInjectedMitm.v2'
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
 /**
- * Upstream framework gap analysis rows (from systemmap-popouts.jsx).
- * @constant {Array<{area: string, have: string, need: string, asdYaml: string, ticket: string, where: string}>}
+ * Escape a string for safe HTML interpolation.
+ * @function escapeHtml
+ * @param {any} val
+ * @returns {string}
+ */
+export function escapeHtml (val) {
+  return String(val ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
+ * Upstream framework gap analysis rows.
+ * @constant {Array<{area: string, have: string, need: string, viaYaml: string, ticket: string, where: string}>}
  */
 const GAPS = [
   {
     area: 'Services inventory',
     have: 'Local services.json / hub-services.json',
-    need: 'asd-cli `asd services list --json` endpoint (hub-served)',
-    asdYaml: 'hub.services.inventory_endpoint',
-    ticket: 'asd-cli#services-list-json',
+    need: 'via-cli `via services list --json` endpoint (hub-served)',
+    viaYaml: 'hub.services.inventory_endpoint',
+    ticket: 'via-cli#services-list-json',
     where: 'Selector panel, command palette, system map nodes'
   },
   {
     area: 'Service state (online/offline)',
     have: 'Client-side state[] on each service',
-    need: 'asd-hub `/state/stream` SSE with per-service health + port liveness',
-    asdYaml: 'hub.health.stream_endpoint',
-    ticket: 'asd-hub#health-sse',
+    need: 'via-hub `/state/stream` SSE with per-service health + port liveness',
+    viaYaml: 'hub.health.stream_endpoint',
+    ticket: 'via-hub#health-sse',
     where: 'Widget offline overlay, runtime panel, node border glow'
   },
   {
     area: 'Service start/stop',
-    have: 'ttyd interactive terminal session',
-    need: '`asd net start --id=<id>` / `asd net stop --id=<id>` via ttyd-or-RPC',
-    asdYaml: 'cli.rpc.socket',
-    ticket: 'asd-cli#rpc-socket',
+    have: 'ttyd interactive terminal session via CLI fallback URL',
+    need: '`via net start --id=<id>` / `via net stop --id=<id>` via ttyd-or-RPC',
+    viaYaml: 'cli.rpc.socket',
+    ticket: 'via-cli#rpc-socket',
     where: 'Offline start button, runtime stop, node drawer'
   },
   {
     area: 'Caddy live routing',
     have: 'Static caddy config via `via net apply`',
     need: 'caddy-api-client to PATCH `/config/apps/http/servers/srv0/routes` live',
-    asdYaml: 'caddy.admin_socket',
-    ticket: 'asd-hub#caddy-api-proxy',
+    viaYaml: 'caddy.admin_socket',
+    ticket: 'via-hub#caddy-api-proxy',
     where: 'mitmproxy edge insertion, rewrite rules, rate limits'
   },
   {
     area: 'mitmproxy injection',
-    have: 'Interactive topology tap + preview',
-    need: 'asd-hub creates mitmproxy tap + rewrites 2 caddy routes atomically',
-    asdYaml: 'hub.mitm.enabled, hub.mitm.image',
-    ticket: 'asd-hub#mitm-inject',
-    where: 'SystemMap edge → Insert mitmproxy flow'
+    have: 'Interactive topology route annotation',
+    need: 'via-hub creates mitmproxy tap + rewrites 2 caddy routes atomically',
+    viaYaml: 'hub.mitm.enabled, hub.mitm.image',
+    ticket: 'via-hub#mitm-inject',
+    where: 'SystemMap edge → Annotate mitmproxy flow'
   },
   {
     area: 'ttyd attach to container',
     have: 'ttyd web terminal service (`/asde/terminal`)',
-    need: 'ttyd entrypoint accepts `?target=<id>` OR `asd shell --attach <id>`',
-    asdYaml: 'cli.shell.ttyd_target_param',
-    ticket: 'asd-cli#shell-attach',
+    need: 'ttyd entrypoint accepts `?target=<id>` OR `via shell --attach <id>`',
+    viaYaml: 'cli.shell.ttyd_target_param',
+    ticket: 'via-cli#shell-attach',
     where: 'Pop out to ttyd button, Node → Shell tab'
   },
   {
     area: 'Container logs',
-    have: 'MCP `/asde/mcp/api/logs/:id` + live preview',
-    need: 'asd-hub `/logs/:id?tail=N&follow=true` (WS or SSE)',
-    asdYaml: 'hub.logs.stream_endpoint',
-    ticket: 'asd-hub#logs-stream',
+    have: 'MCP `/asde/mcp/api/logs/:id` endpoint',
+    need: 'via-hub `/logs/:id?tail=N&follow=true` (WS or SSE)',
+    viaYaml: 'hub.logs.stream_endpoint',
+    ticket: 'via-hub#logs-stream',
     where: 'Node → Logs tab'
   }
 ]
@@ -108,7 +123,7 @@ export function openGapAnalysisModal () {
     `- **Workspace Services**: ${onlineCount}/${services.length} online`,
     `- **Web Terminal (ttyd)**: ${ttydUp ? 'Online (service actions enabled)' : 'Offline (start/stop actions unavailable)'}`,
     '',
-    ...GAPS.map(g => `## ${g.area}\n- **have:** ${g.have}\n- **need:** ${g.need}\n- **asd.yaml:** \`${g.asdYaml}\`\n- **ticket:** ${g.ticket}\n- **used in:** ${g.where}\n`)
+    ...GAPS.map(g => `## ${g.area}\n- **have:** ${g.have}\n- **need:** ${g.need}\n- **via.yaml:** \`${g.viaYaml}\`\n- **ticket:** ${g.ticket}\n- **used in:** ${g.where}\n`)
   ].join('\n')
 
   openModal({
@@ -170,7 +185,7 @@ export function openGapAnalysisModal () {
                 <th style="padding:10px 12px;">Area</th>
                 <th style="padding:10px 12px;">Have today</th>
                 <th style="padding:10px 12px;">Need</th>
-                <th style="padding:10px 12px;">asd.yaml key</th>
+                <th style="padding:10px 12px;">via.yaml key</th>
                 <th style="padding:10px 12px;">Ticket</th>
                 <th style="padding:10px 12px;">Used in</th>
               </tr>
@@ -178,12 +193,12 @@ export function openGapAnalysisModal () {
             <tbody>
               ${rows.map(g => `
                 <tr style="border-top:1px solid var(--line-soft);">
-                  <td style="padding:10px 12px; font-weight:600;">${g.area}</td>
-                  <td style="padding:10px 12px; color:var(--fg-2);">${g.have}</td>
-                  <td style="padding:10px 12px; color:var(--fg);">${g.need}</td>
-                  <td style="padding:10px 12px;"><code class="asd-mono" style="color:var(--accent);">${g.asdYaml}</code></td>
-                  <td style="padding:10px 12px;"><span class="asd-pill">${g.ticket}</span></td>
-                  <td style="padding:10px 12px; color:var(--fg-2); font-size:11px;">${g.where}</td>
+                  <td style="padding:10px 12px; font-weight:600;">${escapeHtml(g.area)}</td>
+                  <td style="padding:10px 12px; color:var(--fg-2);">${escapeHtml(g.have)}</td>
+                  <td style="padding:10px 12px; color:var(--fg);">${escapeHtml(g.need)}</td>
+                  <td style="padding:10px 12px;"><code class="asd-mono" style="color:var(--accent);">${escapeHtml(g.viaYaml)}</code></td>
+                  <td style="padding:10px 12px;"><span class="asd-pill">${escapeHtml(g.ticket)}</span></td>
+                  <td style="padding:10px 12px; color:var(--fg-2); font-size:11px;">${escapeHtml(g.where)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -266,7 +281,7 @@ function loadStickyNotes () {
   return [
     {
       id: 'seed-note-1',
-      text: 'All ingress terminates at Caddy — click any route edge to inject mitmproxy.',
+      text: 'All ingress terminates at Caddy — click any route edge to annotate or inspect.',
       x: 56,
       y: 78
     }
@@ -324,7 +339,7 @@ function saveCustomEdges (list) {
 }
 
 /**
- * Load injected mitmproxy taps from StorageManager.misc.
+ * Load route mitmproxy annotations from StorageManager.misc.
  * @function loadInjectedMitm
  * @returns {Array<{edgeId: string, mitmId: string, from: string, to: string, label: string, x: number, y: number}>}
  */
@@ -334,7 +349,7 @@ function loadInjectedMitm () {
 }
 
 /**
- * Save injected mitmproxy taps to StorageManager.misc.
+ * Save route mitmproxy annotations to StorageManager.misc.
  * @function saveInjectedMitm
  * @param {Array<{edgeId: string, mitmId: string, from: string, to: string, label: string, x: number, y: number}>} list
  * @returns {void}
@@ -370,8 +385,6 @@ export function mountNetworkView (opts = {}) {
     panY: 0,
     showStickies: true,
     logAbort: /** @type {AbortController|null} */ (null),
-    customLogs: /** @type {Record<string, string[]>} */ ({}),
-    localStateOverrides: /** @type {Record<string, 'online'|'offline'>} */ ({}),
     edgeLabelOverrides: /** @type {Record<string, string>} */ ({})
   }
 
@@ -431,7 +444,7 @@ export function mountNetworkView (opts = {}) {
   legendBox.innerHTML = legendKinds.map(k => `
     <span class="network-legend-item">
       <span class="network-legend-swatch" style="background:${NODE_FILLS[k] || 'var(--bg-3)'}"></span>
-      <span>${k}</span>
+      <span>${escapeHtml(k)}</span>
     </span>
   `).join('')
 
@@ -576,14 +589,11 @@ export function mountNetworkView (opts = {}) {
   }
 
   /**
-   * Build the full graph including custom positions, local state overrides, custom edges, and injected mitmproxy nodes.
+   * Build the full graph including custom positions, custom edges, and annotated mitmproxy nodes.
    * @returns {{nodes: import('./topologyBuilder.js').TopologyNode[], edges: import('./topologyBuilder.js').TopologyEdge[], ttydOnline: boolean}}
    */
   function getFullGraph () {
-    const rawServices = (StorageManager.getServices() || []).map(s => {
-      const ov = state.localStateOverrides[s.id]
-      return ov ? { ...s, state: ov } : s
-    })
+    const rawServices = StorageManager.getServices() || []
     const hiddenIds = loadHiddenNodeIds()
     const posMap = loadNodePositions()
     const base = buildWorkspaceTopology(rawServices, hiddenIds, posMap)
@@ -603,7 +613,7 @@ export function mountNetworkView (opts = {}) {
       }
     }
 
-    // Apply injected mitmproxy taps
+    // Apply route mitmproxy annotations
     const taps = loadInjectedMitm()
     for (const tap of taps) {
       if (hiddenIds.has(tap.mitmId)) continue
@@ -614,16 +624,16 @@ export function mountNetworkView (opts = {}) {
       base.nodes.push({
         id: tap.mitmId,
         label: 'mitmproxy',
-        sublabel: 'via=caddy-api :8080 live',
+        sublabel: 'route annotation',
         kind: 'mitm',
         state: 'online',
         x: savedPos.x,
         y: savedPos.y,
-        url: '/asde/inspect/',
-        port: 8080,
+        url: '',
+        port: null,
         fallback: null,
         isTtyd: false,
-        isSynthetic: false,
+        isSynthetic: true,
         flowing: true
       })
       base.edges.splice(
@@ -642,7 +652,7 @@ export function mountNetworkView (opts = {}) {
           id: `${tap.mitmId}-out`,
           from: tap.mitmId,
           to: origEdge.to,
-          label: 'tapped :8080',
+          label: 'annotated',
           status: 'live',
           protocol: origEdge.protocol,
           flowing: true
@@ -654,7 +664,7 @@ export function mountNetworkView (opts = {}) {
   }
 
   /**
-   * Inject a mitmproxy node on an existing edge.
+   * Annotate a mitmproxy node on an existing edge in the local topology diagram.
    * @param {import('./topologyBuilder.js').TopologyEdge} edge
    * @param {{nodes: import('./topologyBuilder.js').TopologyNode[]}} graph
    * @returns {void}
@@ -680,11 +690,11 @@ export function mountNetworkView (opts = {}) {
     state.selectedEdgeId = null
     state.selectedNodeId = mitmId
     refresh()
-    showNotification(`$ asd net tap ${a.id} ${b.id} --via mitmproxy (live on :8080)`, 2800, 'success')
+    showNotification(`Added mitmproxy topology annotation on ${a.label} → ${b.label}`, 2400, 'success')
   }
 
   /**
-   * Open the Edit Edge / Insert mitmproxy modal (from systemmap.jsx mitmDialog).
+   * Open the Edit Edge / Annotate mitmproxy modal.
    * @param {import('./topologyBuilder.js').TopologyEdge} edge
    * @param {{nodes: import('./topologyBuilder.js').TopologyNode[]}} graph
    * @returns {void}
@@ -702,8 +712,8 @@ export function mountNetworkView (opts = {}) {
         hdr.style.gap = '10px'
         hdr.style.marginBottom = '12px'
         hdr.innerHTML = `
-          <b style="font-size:14px;">Inspect / Tap Route Edge</b>
-          <span class="asd-mono" style="font-size:12px; color:var(--fg-3);">${a?.label || edge.from} → ${b?.label || edge.to}</span>
+          <b style="font-size:14px;">Inspect / Annotate Route Edge</b>
+          <span class="asd-mono" style="font-size:12px; color:var(--fg-3);">${escapeHtml(a?.label || edge.from)} → ${escapeHtml(b?.label || edge.to)}</span>
         `
         modal.appendChild(hdr)
 
@@ -739,15 +749,15 @@ export function mountNetworkView (opts = {}) {
         diagram.style.borderRadius = '8px'
         diagram.style.marginBottom = '12px'
         diagram.innerHTML = `
-          <div class="asd-mono" style="font-size:12px; text-align:center; padding:8px; background:var(--bg-3); border-radius:6px;">${a?.label || edge.from}</div>
+          <div class="asd-mono" style="font-size:12px; text-align:center; padding:8px; background:var(--bg-3); border-radius:6px;">${escapeHtml(a?.label || edge.from)}</div>
           <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
             <span class="asd-pill" style="color:var(--accent); border-color:var(--accent);">
               <span class="asd-dot" style="background:var(--accent);"></span>
               <span class="asd-mono">mitmproxy</span>
             </span>
-            <span style="font-size:10px; color:var(--fg-3);">live tap :8080</span>
+            <span style="font-size:10px; color:var(--fg-3);">topology annotation</span>
           </div>
-          <div class="asd-mono" style="font-size:12px; text-align:center; padding:8px; background:var(--bg-3); border-radius:6px;">${b?.label || edge.to}</div>
+          <div class="asd-mono" style="font-size:12px; text-align:center; padding:8px; background:var(--bg-3); border-radius:6px;">${escapeHtml(b?.label || edge.to)}</div>
         `
         modal.appendChild(diagram)
 
@@ -755,7 +765,7 @@ export function mountNetworkView (opts = {}) {
         cmdPre.className = 'drawer-log-box'
         cmdPre.style.minHeight = 'auto'
         cmdPre.style.marginBottom = '14px'
-        cmdPre.textContent = `$ asd net tap ${a?.id || edge.from} ${b?.id || edge.to} --via mitmproxy\n→ PATCH caddy /config/apps/http/servers/srv0/routes\n→ flow live on :8080`
+        cmdPre.textContent = `Route: ${a?.id || edge.from} -> ${b?.id || edge.to} (${edge.protocol})\nNote: Places a visual mitmproxy inspection node on the topology map.`
         modal.appendChild(cmdPre)
 
         const foot = document.createElement('div')
@@ -786,12 +796,13 @@ export function mountNetworkView (opts = {}) {
   }
 
   /**
-   * Open the TtydPopout terminal modal (from systemmap-popouts.jsx).
+   * Open the TtydPopout terminal modal.
    * @param {import('./topologyBuilder.js').TopologyNode} node
    * @param {boolean} ttydOnline
+   * @param {string} ttydUrl
    * @returns {void}
    */
-  function openTtydPopoutModal (node, ttydOnline) {
+  function openTtydPopoutModal (node, ttydOnline, ttydUrl) {
     openModal({
       id: 'network-ttyd-popout-modal',
       buildContent: (modal, closeModal) => {
@@ -802,8 +813,8 @@ export function mountNetworkView (opts = {}) {
         hdr.style.gap = '10px'
         hdr.style.marginBottom = '10px'
         hdr.innerHTML = `
-          <b style="font-size:14px;">ttyd · ${node.label}</b>
-          <span class="asd-mono" style="font-size:11px; color:var(--fg-3);">asd exec ${node.id} -- sh</span>
+          <b style="font-size:14px;">ttyd · ${escapeHtml(node.label)}</b>
+          <span class="asd-mono" style="font-size:11px; color:var(--fg-3);">service=${escapeHtml(node.id)}</span>
           <span class="asd-pill ${ttydOnline ? 'ok' : 'err'}"><span class="asd-dot ${ttydOnline ? 'ok' : 'err'}"></span>${ttydOnline ? 'connected' : 'offline'}</span>
           <span style="flex:1;"></span>
         `
@@ -815,71 +826,28 @@ export function mountNetworkView (opts = {}) {
         hdr.appendChild(closeBtn)
         modal.appendChild(hdr)
 
-        const termBox = document.createElement('div')
-        termBox.className = 'asd-mono'
-        termBox.style.background = '#05070a'
-        termBox.style.color = 'oklch(0.9 0.04 150)'
-        termBox.style.padding = '14px'
-        termBox.style.borderRadius = '8px'
-        termBox.style.fontSize = '12.5px'
-        termBox.style.lineHeight = '1.5'
-        termBox.style.minHeight = '260px'
-        termBox.innerHTML = `
-          <div style="color:var(--fg-3);"># asd shell --attach ${node.id}</div>
-          <div style="color:var(--fg-3);"># via ttyd :7681 · service <b style="color:var(--accent);">${node.id}</b> (${node.sublabel})</div>
-          <div>&nbsp;</div>
-          <div><span style="color:var(--accent);">root@${node.id}</span>:<span style="color:oklch(0.7 0.1 230);">/app</span># uname -a</div>
-          <div>Linux ${node.id} 6.10.0 #1 SMP x86_64 GNU/Linux</div>
-          <div><span style="color:var(--accent);">root@${node.id}</span>:<span style="color:oklch(0.7 0.1 230);">/app</span># ps aux | head -3</div>
-          <div>USER  PID %CPU %MEM COMMAND</div>
-          <div>root    1  0.0  0.1 /sbin/tini -- /entrypoint.sh</div>
-          <div>root   12  0.3  2.4 ${node.id} ${node.port ? `--port ${node.port}` : ''}</div>
-        `
+        if (!ttydOnline) {
+          const offlineNotice = document.createElement('div')
+          offlineNotice.className = 'ttyd-offline-banner'
+          offlineNotice.innerHTML = '<strong>Web Terminal (ttyd) is offline</strong><span>Start the workspace ttyd service to open an interactive terminal session.</span>'
+          modal.appendChild(offlineNotice)
+          return
+        }
 
-        const cmdForm = document.createElement('div')
-        cmdForm.style.display = 'flex'
-        cmdForm.style.alignItems = 'center'
-        cmdForm.style.gap = '6px'
-        cmdForm.style.marginTop = '8px'
-        const promptSpan = document.createElement('span')
-        promptSpan.innerHTML = `<span style="color:var(--accent);">root@${node.id}</span>:<span style="color:oklch(0.7 0.1 230);">/app</span>#`
-        const cmdInput = document.createElement('input')
-        cmdInput.type = 'text'
-        cmdInput.className = 'asd-input asd-mono'
-        cmdInput.placeholder = 'Type command (e.g. health, env, routes, top)…'
-        cmdInput.style.flex = '1'
-        cmdInput.style.background = '#0b0f17'
-        cmdInput.style.color = '#e5e7eb'
-        cmdInput.addEventListener('keydown', (ev) => {
-          if (ev.key === 'Enter' && cmdInput.value.trim()) {
-            const cmd = cmdInput.value.trim()
-            cmdInput.value = ''
-            const cmdLine = document.createElement('div')
-            cmdLine.innerHTML = `<span style="color:var(--accent);">root@${node.id}</span>:/app# ${cmd}`
-            const outLine = document.createElement('div')
-            outLine.style.color = 'oklch(0.82 0.02 255)'
-            if (cmd === 'health') {
-              outLine.textContent = `{"service":"${node.id}","state":"${node.state}","endpoint":"${node.url || node.sublabel}","ok":true}`
-            } else if (cmd === 'routes') {
-              outLine.textContent = `caddy -> ${node.sublabel} (${node.state})`
-            } else if (cmd === 'env') {
-              outLine.textContent = `ASD_SERVICE_ID=${node.id}\nASD_PORT=${node.port || 8080}\nASD_HUB=${getActiveHub().id}`
-            } else {
-              outLine.textContent = `[exec ${node.id}] exited 0: ${cmd}`
-            }
-            termBox.insertBefore(cmdLine, cmdForm)
-            termBox.insertBefore(outLine, cmdForm)
-          }
-        })
-        cmdForm.append(promptSpan, cmdInput)
-        termBox.appendChild(cmdForm)
-        modal.appendChild(termBox)
+        const iframe = document.createElement('iframe')
+        iframe.src = ttydUrl || '/asde/terminal/'
+        iframe.style.width = '100%'
+        iframe.style.height = '420px'
+        iframe.style.border = '1px solid var(--line)'
+        iframe.style.borderRadius = '8px'
+        iframe.style.background = '#05070a'
+        modal.appendChild(iframe)
       }
     })
   }
 
   /**
-   * Open the WidgetPopout modal with Minimize-to-dock support (from systemmap-popouts.jsx).
+   * Open the WidgetPopout modal with Minimize-to-dock support.
    * @param {import('./topologyBuilder.js').TopologyNode} node
    * @returns {void}
    */
@@ -940,9 +908,9 @@ export function mountNetworkView (opts = {}) {
         } else {
           frameWrap.innerHTML = `
             <div style="height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--fg-2);">
-              <div class="asd-mono" style="font-size:12px; color:var(--fg-3);">${node.state.toUpperCase()} PREVIEW</div>
-              <div style="font-size:16px; font-weight:600; color:var(--fg);">${node.label}</div>
-              <code class="asd-mono" style="padding:4px 10px; background:var(--bg-2); border-radius:6px;">${node.url || node.sublabel}</code>
+              <div class="asd-mono" style="font-size:12px; color:var(--fg-3);">${escapeHtml(node.state.toUpperCase())} PREVIEW</div>
+              <div style="font-size:16px; font-weight:600; color:var(--fg);">${escapeHtml(node.label)}</div>
+              <code class="asd-mono" style="padding:4px 10px; background:var(--bg-2); border-radius:6px;">${escapeHtml(node.url || node.sublabel)}</code>
             </div>
           `
         }
@@ -962,7 +930,7 @@ export function mountNetworkView (opts = {}) {
     pill.className = 'network-minimized-pill'
     pill.innerHTML = `
       <span class="asd-dot ok"></span>
-      <b>${node.label}</b>
+      <b>${escapeHtml(node.label)}</b>
       <span class="asd-mono" style="font-size:11px; color:var(--fg-3);">minimized</span>
     `
     const restoreBtn = document.createElement('button')
@@ -982,72 +950,6 @@ export function mountNetworkView (opts = {}) {
     })
     pill.append(restoreBtn, closeBtn)
     popoutDock.appendChild(pill)
-  }
-
-  /**
-   * Open the destructive Shutdown confirmation dialog (from systemmap.jsx ShutdownDialog).
-   * @param {import('./topologyBuilder.js').TopologyNode} node
-   * @returns {void}
-   */
-  function openShutdownDialog (node) {
-    openModal({
-      id: 'network-shutdown-modal',
-      buildContent: (modal, closeModal) => {
-        modal.style.width = 'min(460px, 94vw)'
-        const h = document.createElement('div')
-        h.style.display = 'flex'
-        h.style.alignItems = 'center'
-        h.style.gap = '8px'
-        h.style.marginBottom = '10px'
-        h.innerHTML = `<span class="asd-dot err"></span><b style="font-size:14px;">Shutdown ${node.label}?</b>`
-        modal.appendChild(h)
-
-        const desc = document.createElement('p')
-        desc.style.fontSize = '12.5px'
-        desc.style.color = 'var(--fg-2)'
-        desc.style.lineHeight = '1.5'
-        desc.innerHTML = `This runs <code class="asd-mono">asd shutdown ${node.id}</code> on the hub and marks the service offline. Type <code class="asd-mono">${node.id}</code> below to confirm:`
-        modal.appendChild(desc)
-
-        const input = document.createElement('input')
-        input.type = 'text'
-        input.className = 'asd-input asd-mono'
-        input.style.width = '100%'
-        input.style.marginBottom = '12px'
-        input.placeholder = node.id
-        modal.appendChild(input)
-
-        const foot = document.createElement('div')
-        foot.style.display = 'flex'
-        foot.style.justifyContent = 'flex-end'
-        foot.style.gap = '8px'
-
-        const cancelBtn = document.createElement('button')
-        cancelBtn.type = 'button'
-        cancelBtn.className = 'asd-btn'
-        cancelBtn.textContent = 'Cancel'
-        cancelBtn.addEventListener('click', closeModal)
-
-        const confirmBtn = document.createElement('button')
-        confirmBtn.type = 'button'
-        confirmBtn.className = 'asd-btn danger'
-        confirmBtn.disabled = true
-        confirmBtn.textContent = 'Shutdown service'
-
-        input.addEventListener('input', () => {
-          confirmBtn.disabled = input.value.trim() !== node.id
-        })
-        confirmBtn.addEventListener('click', () => {
-          state.localStateOverrides[node.id] = 'offline'
-          closeModal()
-          refresh()
-          showNotification(`$ asd shutdown ${node.id} — service stopped`, 2500, 'success')
-        })
-
-        foot.append(cancelBtn, confirmBtn)
-        modal.appendChild(foot)
-      }
-    })
   }
 
   /**
@@ -1184,10 +1086,10 @@ export function mountNetworkView (opts = {}) {
       header.innerHTML = `
         <div class="drawer-title-group">
           <div class="drawer-title-row">
-            <span data-testid="drawer-node-title">${a?.label || selectedEdge.from} → ${b?.label || selectedEdge.to}</span>
+            <span data-testid="drawer-node-title">${escapeHtml(a?.label || selectedEdge.from)} → ${escapeHtml(b?.label || selectedEdge.to)}</span>
             <span class="asd-pill">edge</span>
           </div>
-          <div class="drawer-subtitle">${selectedEdge.protocol} · ${selectedEdge.flowing ? 'mitmproxy active' : 'direct route'}</div>
+          <div class="drawer-subtitle">${escapeHtml(selectedEdge.protocol)} · ${selectedEdge.flowing ? 'mitmproxy annotated' : 'direct route'}</div>
         </div>
       `
       const closeBtn = document.createElement('button')
@@ -1208,13 +1110,13 @@ export function mountNetworkView (opts = {}) {
       kv.className = 'drawer-kv-grid'
       kv.innerHTML = `
         <div class="drawer-kv-label">From</div>
-        <div class="drawer-kv-val">${a?.label || selectedEdge.from}</div>
+        <div class="drawer-kv-val">${escapeHtml(a?.label || selectedEdge.from)}</div>
         <div class="drawer-kv-label">To</div>
-        <div class="drawer-kv-val">${b?.label || selectedEdge.to}</div>
+        <div class="drawer-kv-val">${escapeHtml(b?.label || selectedEdge.to)}</div>
         <div class="drawer-kv-label">Protocol</div>
-        <div class="drawer-kv-val">${selectedEdge.protocol}</div>
+        <div class="drawer-kv-val">${escapeHtml(selectedEdge.protocol)}</div>
         <div class="drawer-kv-label">Flowing</div>
-        <div class="drawer-kv-val">${selectedEdge.flowing ? 'yes · mitmproxy :8080' : 'standard'}</div>
+        <div class="drawer-kv-val">${selectedEdge.flowing ? 'annotated (mitmproxy)' : 'standard'}</div>
       `
       content.appendChild(kv)
 
@@ -1242,13 +1144,13 @@ export function mountNetworkView (opts = {}) {
       mitmBtn.type = 'button'
       mitmBtn.className = 'asd-btn primary'
       mitmBtn.dataset.testid = 'edge-insert-mitm'
-      mitmBtn.textContent = '⟿ Insert mitmproxy on Route'
+      mitmBtn.textContent = '⟿ Annotate mitmproxy on Route'
       mitmBtn.addEventListener('click', () => insertMitmOnEdge(selectedEdge, graph))
 
       const modalBtn = document.createElement('button')
       modalBtn.type = 'button'
       modalBtn.className = 'asd-btn'
-      modalBtn.textContent = 'Configure Tap & Caddy Patch…'
+      modalBtn.textContent = 'Configure Route Annotation…'
       modalBtn.addEventListener('click', () => openMitmEdgeModal(selectedEdge, graph))
 
       const delEdgeBtn = document.createElement('button')
@@ -1269,8 +1171,9 @@ export function mountNetworkView (opts = {}) {
       return
     }
 
-    // CASE 3: Nothing selected -> MapOverview (from systemmap.jsx MapOverview)
+    // CASE 3: Nothing selected -> MapOverview
     if (!selectedNode) {
+      const activeHub = getActiveHub()
       const header = document.createElement('div')
       header.className = 'drawer-header'
       header.innerHTML = `
@@ -1279,7 +1182,7 @@ export function mountNetworkView (opts = {}) {
             <span data-testid="drawer-node-title">Network Topology</span>
             <span class="asd-pill ok">live</span>
           </div>
-          <div class="drawer-subtitle">Hub: ${getActiveHub().name}</div>
+          <div class="drawer-subtitle">Hub: ${escapeHtml(activeHub.name)}</div>
         </div>
       `
       drawer.appendChild(header)
@@ -1298,7 +1201,7 @@ export function mountNetworkView (opts = {}) {
         <p style="margin:0 0 8px;">• Click any <b>service node</b> for metadata, live logs, interactive shell, and widget popout.</p>
         <p style="margin:0 0 8px;">• Drag any <b>node</b> to rearrange the topology layout.</p>
         <p style="margin:0 0 8px;">• Drag from a node's <b>right blue dot</b> to another node to connect two systems.</p>
-        <p style="margin:0;">• Click any <b>route edge</b> to inspect or inject <code class="asd-mono" style="color:var(--accent);">mitmproxy</code>.</p>
+        <p style="margin:0;">• Click any <b>route edge</b> to inspect or annotate <code class="asd-mono" style="color:var(--accent);">mitmproxy</code>.</p>
       `
       content.appendChild(guide)
 
@@ -1311,9 +1214,9 @@ export function mountNetworkView (opts = {}) {
           <div class="drawer-kv-label">Runtime</div>
           <div class="drawer-kv-val" style="color:var(--ok);">bun · caddy-api</div>
           <div class="drawer-kv-label">Active Hub</div>
-          <div class="drawer-kv-val">${getActiveHub().id}</div>
+          <div class="drawer-kv-val">${escapeHtml(activeHub.id)}</div>
           <div class="drawer-kv-label">Web Terminal</div>
-          <div class="drawer-kv-val" style="color:${graph.ttydOnline ? 'var(--ok)' : 'var(--err)'};">ttyd (${graph.ttydOnline ? ':7681 online' : 'offline'})</div>
+          <div class="drawer-kv-val" style="color:${graph.ttydOnline ? 'var(--ok)' : 'var(--err)'};">ttyd (${graph.ttydOnline ? 'online' : 'offline'})</div>
           <div class="drawer-kv-label">Services</div>
           <div class="drawer-kv-val">${onlineCount} / ${totalCount} online</div>
           <div class="drawer-kv-label">Routes</div>
@@ -1435,49 +1338,32 @@ export function mountNetworkView (opts = {}) {
           actionsStack.appendChild(notice)
         }
 
-        const taskBtn = document.createElement('button')
-        taskBtn.type = 'button'
-        const actionName = node.fallback?.name || (node.state === 'offline' ? `Start ${node.label}` : `Stop ${node.label}`)
-        taskBtn.className = `asd-btn ${node.state === 'offline' ? 'ok' : 'primary'}`
-        taskBtn.dataset.testid = 'drawer-service-action-btn'
-        taskBtn.textContent = actionName
-        taskBtn.disabled = !graph.ttydOnline
-        taskBtn.addEventListener('click', () => {
-          const actionUrl = node.fallback?.url ||
-            `/asde/terminal/?arg=asd&arg=net&arg=${node.state === 'offline' ? 'start' : 'stop'}&arg=--id%3D${encodeURIComponent(node.id)}`
-          showServiceModal(
-            { id: node.id, name: `${node.label} (${actionName})`, url: actionUrl },
-            null,
-            { onDone: () => refresh() }
-          )
-        })
-        actionsStack.appendChild(taskBtn)
-
-        // Quick local toggle simulation button so the user can test state transitions anytime
-        const simRow = document.createElement('div')
-        simRow.style.display = 'flex'
-        simRow.style.gap = '6px'
-
-        const simToggleBtn = document.createElement('button')
-        simToggleBtn.type = 'button'
-        simToggleBtn.className = 'asd-btn sm'
-        simToggleBtn.style.flex = '1'
-        simToggleBtn.textContent = node.state === 'online' ? '⏸ Set Offline (Sim)' : '▶ Set Online (Sim)'
-        simToggleBtn.addEventListener('click', () => {
-          state.localStateOverrides[node.id] = node.state === 'online' ? 'offline' : 'online'
-          refresh()
-          showNotification(`${node.label} marked ${state.localStateOverrides[node.id]}`, 1800, 'success')
-        })
+        // Only render a service start/stop button when the CLI provides an explicit action URL (fallback.url)
+        const actionUrl = node.fallback?.url || ''
+        if (actionUrl) {
+          const taskBtn = document.createElement('button')
+          taskBtn.type = 'button'
+          const actionName = node.fallback?.name || (node.state === 'offline' ? `Start ${node.label}` : `Stop ${node.label}`)
+          taskBtn.className = `asd-btn ${node.state === 'offline' ? 'ok' : 'primary'}`
+          taskBtn.dataset.testid = 'drawer-service-action-btn'
+          taskBtn.textContent = actionName
+          taskBtn.disabled = !graph.ttydOnline
+          taskBtn.addEventListener('click', () => {
+            showServiceModal(
+              { id: node.id, name: `${node.label} (${actionName})`, url: actionUrl },
+              null,
+              { onDone: () => refresh() }
+            )
+          })
+          actionsStack.appendChild(taskBtn)
+        }
 
         const popWidgetBtn = document.createElement('button')
         popWidgetBtn.type = 'button'
         popWidgetBtn.className = 'asd-btn sm'
-        popWidgetBtn.style.flex = '1'
         popWidgetBtn.textContent = '⤢ Pop out Widget'
         popWidgetBtn.addEventListener('click', () => openWidgetPopoutModal(node))
-
-        simRow.append(simToggleBtn, popWidgetBtn)
-        actionsStack.appendChild(simRow)
+        actionsStack.appendChild(popWidgetBtn)
       }
 
       if (node.rawService && node.url) {
@@ -1513,14 +1399,14 @@ export function mountNetworkView (opts = {}) {
         actionsStack.appendChild(extLink)
       }
 
-      // Lifecycle section (Hide from map vs Shutdown service)
+      // Visibility section
       const lifeTitle = document.createElement('div')
       lifeTitle.style.fontSize = '10px'
       lifeTitle.style.textTransform = 'uppercase'
       lifeTitle.style.letterSpacing = '0.12em'
       lifeTitle.style.color = 'var(--fg-3)'
       lifeTitle.style.marginTop = '8px'
-      lifeTitle.textContent = 'Lifecycle'
+      lifeTitle.textContent = 'Map Visibility'
       actionsStack.appendChild(lifeTitle)
 
       const hideBtn = document.createElement('button')
@@ -1538,47 +1424,13 @@ export function mountNetworkView (opts = {}) {
       })
       actionsStack.appendChild(hideBtn)
 
-      if (node.kind !== 'client' && node.kind !== 'hub') {
-        const shutBtn = document.createElement('button')
-        shutBtn.type = 'button'
-        shutBtn.className = 'asd-btn danger'
-        shutBtn.textContent = '■ Shutdown service… (asd shutdown)'
-        shutBtn.addEventListener('click', () => openShutdownDialog(node))
-        actionsStack.appendChild(shutBtn)
-      }
-
       content.appendChild(actionsStack)
     } else if (state.activeTab === 'logs') {
       const logBox = document.createElement('div')
       logBox.className = 'drawer-log-box'
       logBox.dataset.testid = 'drawer-log-box'
-      const baseLines = [
-        `[12:01:10] ${node.label} (${node.id}) initialized`,
-        `[12:01:11] bound ${node.port ? ':' + node.port : 'local socket'} · kind=${node.kind}`,
-        `[12:01:12] caddy route registered → ${node.sublabel}`,
-        `[12:01:14] healthcheck state=${node.state.toUpperCase()}`,
-        '[12:02:05] GET /asd/healthcheck 200 2ms',
-        ...(state.customLogs[node.id] || [])
-      ]
-      logBox.textContent = baseLines.join('\n')
+      logBox.textContent = `Fetching live logs for ${node.id} from /asde/mcp/api/logs/${node.id}…`
       content.appendChild(logBox)
-
-      const logActions = document.createElement('div')
-      logActions.style.display = 'flex'
-      logActions.style.gap = '6px'
-
-      const simReqBtn = document.createElement('button')
-      simReqBtn.type = 'button'
-      simReqBtn.className = 'asd-btn sm'
-      simReqBtn.textContent = '+ Simulate HTTP Request'
-      simReqBtn.addEventListener('click', () => {
-        const ts = new Date().toTimeString().slice(0, 8)
-        const line = `[${ts}] ${node.label} req=GET ${node.url || '/api/v1/status'} 200 ${Math.floor(Math.random() * 18) + 2}ms`
-        state.customLogs[node.id] = [...(state.customLogs[node.id] || []), line]
-        logBox.textContent = [...baseLines, ...(state.customLogs[node.id] || [])].join('\n')
-      })
-      logActions.appendChild(simReqBtn)
-      content.appendChild(logActions)
 
       const ctrl = new AbortController()
       state.logAbort = ctrl
@@ -1587,13 +1439,17 @@ export function mountNetworkView (opts = {}) {
         headers: { accept: 'text/plain, text/event-stream, application/json' }
       })
         .then(async (res) => {
-          if (!res.ok) return
-          const text = await res.text()
-          if (text.trim()) {
-            logBox.textContent = text.trim()
+          if (!res.ok) {
+            logBox.textContent = `Live log stream unavailable (/asde/mcp/api/logs/${node.id} returned HTTP ${res.status}).`
+            return
           }
+          const text = await res.text()
+          logBox.textContent = text.trim() || `No log entries returned for ${node.id}.`
         })
-        .catch(() => { /* keep seeded live log view when MCP stream is offline */ })
+        .catch((err) => {
+          if (err?.name === 'AbortError') return
+          logBox.textContent = `Live log stream unavailable (/asde/mcp/api/logs/${node.id} is offline or unreachable).`
+        })
     } else if (state.activeTab === 'shell') {
       if (!graph.ttydOnline) {
         const emptyShell = document.createElement('div')
@@ -1602,24 +1458,20 @@ export function mountNetworkView (opts = {}) {
         emptyShell.innerHTML = '<strong>Web Terminal (ttyd) is offline</strong><span>Interactive shell sessions require the workspace ttyd daemon to be online.</span>'
         content.appendChild(emptyShell)
       } else {
-        const preview = document.createElement('div')
-        preview.className = 'drawer-log-box'
-        preview.style.minHeight = '90px'
-        preview.innerHTML = `<div style="color:var(--fg-3);"># asd exec ${node.id} -- sh</div><div><span style="color:var(--accent);">root@${node.id}</span>:/app$ ▋</div>`
-        content.appendChild(preview)
+        const ttydNode = graph.nodes.find(n => n.isTtyd)
+        const ttydUrl = ttydNode?.url || '/asde/terminal/'
 
         const popTtydBtn = document.createElement('button')
         popTtydBtn.type = 'button'
         popTtydBtn.className = 'asd-btn primary'
         popTtydBtn.textContent = '⤢ Pop out Interactive Shell (ttyd)'
-        popTtydBtn.addEventListener('click', () => openTtydPopoutModal(node, graph.ttydOnline))
+        popTtydBtn.addEventListener('click', () => openTtydPopoutModal(node, graph.ttydOnline, ttydUrl))
         content.appendChild(popTtydBtn)
 
-        const sessionUrl = `/asde/terminal/?arg=--session%3Dnet-${encodeURIComponent(node.id)}`
         const iframe = document.createElement('iframe')
         iframe.className = 'drawer-shell-frame'
         iframe.dataset.testid = 'drawer-shell-iframe'
-        iframe.src = sessionUrl
+        iframe.src = ttydUrl
         content.appendChild(iframe)
       }
     } else if (state.activeTab === 'network') {
@@ -1627,12 +1479,12 @@ export function mountNetworkView (opts = {}) {
       const kv = document.createElement('div')
       kv.className = 'drawer-kv-grid'
       kv.innerHTML = `
-        <div class="drawer-kv-label">Host</div>
-        <div class="drawer-kv-val">${node.id}.localhost</div>
+        <div class="drawer-kv-label">Service ID</div>
+        <div class="drawer-kv-val">${escapeHtml(node.id)}</div>
         <div class="drawer-kv-label">Port</div>
-        <div class="drawer-kv-val">${node.port || '—'}</div>
+        <div class="drawer-kv-val">${escapeHtml(node.port || '—')}</div>
         <div class="drawer-kv-label">Target URL</div>
-        <div class="drawer-kv-val">${node.url || 'local-internal'}</div>
+        <div class="drawer-kv-val">${escapeHtml(node.url || '—')}</div>
         <div class="drawer-kv-label">Active Routes</div>
         <div class="drawer-kv-val">${connectedEdges.length}</div>
         <div class="drawer-kv-label">Tunnel</div>
@@ -1651,11 +1503,13 @@ export function mountNetworkView (opts = {}) {
         row.style.justifyContent = 'space-between'
         row.style.alignItems = 'center'
         row.className = 'asd-mono'
-        row.innerHTML = `<span>${edge.from} → ${edge.to} [${edge.protocol}]</span>`
+        const span = document.createElement('span')
+        span.textContent = `${edge.from} → ${edge.to} [${edge.protocol}]`
+        row.appendChild(span)
         const tapBtn = document.createElement('button')
         tapBtn.type = 'button'
         tapBtn.className = 'asd-btn ghost sm'
-        tapBtn.textContent = 'Tap mitm'
+        tapBtn.textContent = 'Annotate mitm'
         tapBtn.addEventListener('click', () => insertMitmOnEdge(edge, graph))
         row.appendChild(tapBtn)
         content.appendChild(row)
@@ -1944,13 +1798,13 @@ export function mountNetworkView (opts = {}) {
 
     // Update top-right hint pill
     hintPill.innerHTML = `
-      <span>hub: <b style="color:var(--accent);">${getActiveHub().id}</b></span>
+      <span>hub: <b style="color:var(--accent);">${escapeHtml(getActiveHub().id)}</b></span>
       <span>·</span>
       <span>drag node = move</span>
       <span>·</span>
       <span>drag blue dot = connect</span>
       <span>·</span>
-      <span>click edge = insert mitm</span>
+      <span>click edge = annotate mitm</span>
     `
 
     return graph
@@ -2076,7 +1930,7 @@ export function mountNetworkView (opts = {}) {
     resetZoomBtn.className = 'asd-btn sm asd-mono'
     resetZoomBtn.dataset.testid = 'network-zoom-reset'
     resetZoomBtn.textContent = `${Math.round(state.zoom * 100)}%`
-    resetZoomBtn.title = 'Reset pan, zoom, and custom node positions'
+    resetZoomBtn.title = 'Reset pan and zoom'
     resetZoomBtn.addEventListener('click', () => {
       state.zoom = 1
       state.panX = 0
@@ -2114,7 +1968,7 @@ export function mountNetworkView (opts = {}) {
 
   document.addEventListener('state-change', (e) => {
     const reason = /** @type {CustomEvent} */ (e).detail?.reason
-    if (reason === 'services' || reason === 'config') {
+    if (reason === 'config') {
       refresh()
     }
   })

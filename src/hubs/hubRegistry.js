@@ -11,6 +11,7 @@ const logger = new Logger('hubRegistry.js')
 
 const HUBS_KEY = 'hubs.v2'
 const ACTIVE_HUB_KEY = 'activeHub.v2'
+const LOCAL_SERVICES_BACKUP_KEY = 'localServicesBackup.v2'
 
 /**
  * @typedef {Object} HubEntry
@@ -27,12 +28,32 @@ const ACTIVE_HUB_KEY = 'activeHub.v2'
  */
 
 /**
- * Derive live service counts from StorageManager for the current workspace hub.
+ * Validate and normalize an HTTP(S) hub URL.
+ * @function sanitizeHubUrl
+ * @param {string} rawUrl
+ * @returns {string|null}
+ */
+export function sanitizeHubUrl (rawUrl) {
+  try {
+    const base = typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'http://localhost:8000'
+    const parsed = new URL(String(rawUrl || '').trim(), base)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.origin + parsed.pathname.replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Derive live service counts from a services array or StorageManager.
  * @function computeLocalServiceCounts
+ * @param {Array<any>} [servicesList]
  * @returns {{servicesUp: number, servicesTotal: number, status: 'online'|'degraded'|'offline'}}
  */
-export function computeLocalServiceCounts () {
-  const services = StorageManager.getServices() || []
+export function computeLocalServiceCounts (servicesList) {
+  const services = Array.isArray(servicesList) ? servicesList : (StorageManager.getServices() || [])
   const total = services.length
   const up = services.filter(s => String(s?.state || 'online').toLowerCase() !== 'offline').length
   /** @type {'online'|'degraded'|'offline'} */
@@ -59,15 +80,19 @@ export function buildDefaultLocalHub () {
   const name = cfg?.branding?.workspaceName ||
     cfg?.projectName ||
     (isTunnel ? host.split('.')[0] : 'local-workspace')
-  const counts = computeLocalServiceCounts()
+  const activeId = StorageManager.misc.getItem(ACTIVE_HUB_KEY)
+  const backupSvcs = StorageManager.misc.getItem(LOCAL_SERVICES_BACKUP_KEY)
+  const counts = (activeId && activeId !== 'hub-local' && Array.isArray(backupSvcs))
+    ? computeLocalServiceCounts(backupSvcs)
+    : computeLocalServiceCounts()
   return {
     id: 'hub-local',
     name: String(name || 'local-workspace'),
     url: origin,
     env: isTunnel ? 'dev' : 'local',
     status: counts.status,
-    region: isTunnel ? 'eu-central' : 'localhost',
-    version: 'v2.4',
+    region: isTunnel ? 'remote' : 'localhost',
+    version: cfg?.version ? String(cfg.version) : '',
     servicesUp: counts.servicesUp,
     servicesTotal: counts.servicesTotal,
     pinned: true
@@ -93,6 +118,7 @@ export function getHubs () {
   } else {
     list[idx] = {
       ...list[idx],
+      name: localHub.name,
       url: localHub.url,
       status: localHub.status,
       servicesUp: localHub.servicesUp,
@@ -141,17 +167,72 @@ export function getActiveHub () {
 }
 
 /**
- * Set the active hub by ID.
+ * Fetch and apply services from the given hub's endpoint.
+ * @function syncServicesFromHub
+ * @param {HubEntry} hub
+ * @returns {Promise<Array<any>>}
+ */
+export async function syncServicesFromHub (hub) {
+  if (!hub) return []
+  const baseUrl = (sanitizeHubUrl(hub.url) || hub.url).replace(/\/+$/, '')
+  const urlsToTry = [`${baseUrl}/asde/hub-services.json`, `${baseUrl}/services.json`]
+  for (const endpoint of urlsToTry) {
+    try {
+      const res = await fetch(endpoint, { cache: 'no-store', credentials: 'omit' })
+      if (res.ok) {
+        const svcs = await res.json()
+        if (Array.isArray(svcs)) {
+          StorageManager.setServices(svcs)
+          const counts = computeLocalServiceCounts(svcs)
+          upsertHub({ ...hub, ...counts })
+          if (typeof document !== 'undefined') {
+            document.dispatchEvent(new CustomEvent('services-updated'))
+          }
+          return svcs
+        }
+      }
+    } catch (err) {
+      logger.warn(`Failed fetching services from ${endpoint}:`, err)
+    }
+  }
+
+  if (hub.id === 'hub-local') {
+    const backup = StorageManager.misc.getItem(LOCAL_SERVICES_BACKUP_KEY)
+    if (Array.isArray(backup)) {
+      StorageManager.setServices(backup)
+      if (typeof document !== 'undefined') {
+        document.dispatchEvent(new CustomEvent('services-updated'))
+      }
+      return backup
+    }
+  }
+
+  // Remote hub unreachable or returned no valid services array: reflect empty/offline state honestly
+  StorageManager.setServices([])
+  upsertHub({ ...hub, status: 'offline', servicesUp: 0, servicesTotal: 0 })
+  if (typeof document !== 'undefined') {
+    document.dispatchEvent(new CustomEvent('services-updated'))
+  }
+  return []
+}
+
+/**
+ * Set the active hub by ID and load its services into the workspace.
  * @function setActiveHubId
  * @param {string} id
  * @returns {HubEntry}
  */
 export function setActiveHubId (id) {
+  const prevId = getActiveHubId()
   const hubs = getHubs()
   const target = hubs.find(h => h.id === id) || hubs[0] || buildDefaultLocalHub()
+  if (prevId === 'hub-local' && target.id !== 'hub-local') {
+    StorageManager.misc.setItem(LOCAL_SERVICES_BACKUP_KEY, StorageManager.getServices() || [])
+  }
   StorageManager.misc.setItem(ACTIVE_HUB_KEY, target.id)
   logger.log(`Switched active hub to ${target.name} (${target.id})`)
   emitHubsChanged()
+  syncServicesFromHub(target).catch(err => logger.warn('Hub sync failed:', err))
   return target
 }
 
@@ -165,15 +246,16 @@ export function upsertHub (input) {
   const hubs = getHubs()
   const id = input.id || `hub-${Date.now().toString(36)}`
   const existingIdx = hubs.findIndex(h => h.id === id)
+  const cleanUrl = sanitizeHubUrl(input.url) || 'http://localhost:8000'
   /** @type {HubEntry} */
   const entry = {
     id,
     name: String(input.name).trim() || 'remote-hub',
-    url: String(input.url).trim() || 'https://localhost',
+    url: cleanUrl,
     env: input.env || 'dev',
     status: input.status || 'online',
     region: input.region || 'remote',
-    version: input.version || 'v2.4',
+    version: input.version || '',
     servicesUp: typeof input.servicesUp === 'number' ? input.servicesUp : 0,
     servicesTotal: typeof input.servicesTotal === 'number' ? input.servicesTotal : 0,
     pinned: Boolean(input.pinned)
@@ -221,8 +303,8 @@ export async function probeHubHealth (id) {
     return updated
   }
   try {
-    const baseUrl = hub.url.replace(/\/+$/, '')
-    const res = await fetch(`${baseUrl}/asde/hub-services.json`, { cache: 'no-store' })
+    const baseUrl = (sanitizeHubUrl(hub.url) || hub.url).replace(/\/+$/, '')
+    const res = await fetch(`${baseUrl}/asde/hub-services.json`, { cache: 'no-store', credentials: 'omit' })
     if (res.ok) {
       const svcs = await res.json()
       if (Array.isArray(svcs)) {

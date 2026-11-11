@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * Pure topology graph builder for the Viaalink Network View.
- * Derives interactive SVG nodes and edges from workspace services.
+ * Derives interactive SVG nodes and edges strictly from workspace services.
  * @module views/network/topologyBuilder
  */
 
@@ -39,7 +39,7 @@
  */
 
 /**
- * Color palette per node kind (mirrors Claude Design systemmap.jsx NODE_FILLS).
+ * Color palette per node kind.
  * @constant {Record<string, string>}
  */
 export const NODE_FILLS = {
@@ -59,31 +59,13 @@ export const NODE_FILLS = {
 }
 
 /**
- * Known ASD service metadata for services whose `url` is empty in `services.json`.
- * @constant {Record<string, {port?: number, route: string, url: string, kind: NodeKind}>}
- */
-const KNOWN_ASD_SERVICES = {
-  ttyd: { port: 7681, route: '/asde/terminal', url: '/asde/terminal/', kind: 'terminal' },
-  dbgate: { port: 46167, route: '/asde/database', url: '/asde/database/', kind: 'db' },
-  mitmproxy: { port: 8080, route: '/asde/inspect', url: '/asde/inspect/', kind: 'proxy' },
-  codeserver: { port: 8443, route: '/asde/codeserver', url: '/asde/codeserver/', kind: 'ide' },
-  mcp: { port: 8091, route: '/asde/mcp', url: '/asde/mcp/', kind: 'api' },
-  hub: { port: 8080, route: '/asde/hub', url: '/asde/hub/', kind: 'hub' }
-}
-
-/**
- * Infer port number from a service object or URL/id.
+ * Infer port number from a service object's explicit port, URL, or `service-<port>` id.
  * @function inferServicePort
  * @param {any} svc
  * @returns {number|null}
  */
 export function inferServicePort (svc) {
   if (typeof svc?.port === 'number' && svc.port > 0) return svc.port
-  const id = String(svc?.id || '')
-  const known = KNOWN_ASD_SERVICES[id.toLowerCase()]
-  if (known?.port) return known.port
-  const portMatch = id.match(/service-(\d+)/i)
-  if (portMatch) return Number(portMatch[1])
   const url = String(svc?.url || '')
   if (url) {
     try {
@@ -91,6 +73,9 @@ export function inferServicePort (svc) {
       if (parsed.port) return Number(parsed.port)
     } catch { /* ignore */ }
   }
+  const id = String(svc?.id || '')
+  const portMatch = id.match(/^service-(\d+)$/i)
+  if (portMatch) return Number(portMatch[1])
   return null
 }
 
@@ -103,15 +88,11 @@ export function inferServicePort (svc) {
  * @returns {string}
  */
 export function formatServiceEndpoint (url, fallbackId, port = null) {
-  const known = KNOWN_ASD_SERVICES[String(fallbackId || '').toLowerCase()]
   if (!url || typeof url !== 'string' || !url.trim()) {
-    if (known) {
-      return known.port ? `port=${known.port} ${known.route}` : known.route
-    }
     if (port) {
-      return `port=${port} ${fallbackId}.localhost`
+      return `port=${port}`
     }
-    return `${fallbackId}.localhost`
+    return fallbackId
   }
   try {
     const parsed = new URL(url, 'http://localhost')
@@ -191,7 +172,7 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
       state: 'online',
       x: pos.x,
       y: pos.y,
-      url: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000',
+      url: typeof window !== 'undefined' ? window.location.origin : '',
       port: null,
       fallback: null,
       isTtyd: false,
@@ -199,24 +180,34 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
     })
   }
 
-  // Check if any service uses a public tunnel or is a tunnel service
-  const hasTunnelRoutes = list.some(s => {
+  // Check if any service uses a public tunnel URL or is a tunnel service
+  let tunnelServiceUrl = ''
+  let tunnelHostLabel = 'tunnel'
+  for (const s of list) {
     const u = String(s?.url || '')
-    return u.includes('.tn.') || u.includes('asd.engineer') || u.includes('viaal.ink') || String(s?.id || '').includes('tunnel')
-  })
+    if (u.includes('.tn.') || u.includes('asd.engineer') || u.includes('viaal.ink') || String(s?.id || '').includes('tunnel')) {
+      tunnelServiceUrl = u
+      try {
+        const parsed = new URL(u)
+        tunnelHostLabel = parsed.hostname
+      } catch { /* ignore */ }
+      break
+    }
+  }
+  const hasTunnelRoutes = Boolean(tunnelServiceUrl) || list.some(s => String(s?.id || '').includes('tunnel'))
 
   if (hasTunnelRoutes && !hiddenIds.has('edge-tunnel')) {
     const pos = applyPos('edge-tunnel', 30, 340)
     nodes.push({
       id: 'edge-tunnel',
       label: 'Viaalink Edge Relay',
-      sublabel: 'SSH / TLS Tunnel',
+      sublabel: tunnelHostLabel,
       kind: 'tunnel',
       state: 'online',
       x: pos.x,
       y: pos.y,
-      url: 'https://hub.eu.viaal.ink',
-      port: 443,
+      url: tunnelServiceUrl,
+      port: null,
       fallback: null,
       isTtyd: false,
       isSynthetic: true
@@ -232,16 +223,16 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
 
   if (!hiddenIds.has(caddyId)) {
     const pos = applyPos(caddyId, 255, 220)
-    const caddyPort = inferServicePort(caddySvc) || (typeof window !== 'undefined' && window.location.port ? Number(window.location.port) : 443)
+    const caddyPort = inferServicePort(caddySvc) || (typeof window !== 'undefined' && window.location.port ? Number(window.location.port) : null)
     nodes.push({
       id: caddyId,
       label: caddySvc?.name || 'Caddy Ingress',
-      sublabel: `port=${caddyPort} routes=${Math.max(4, list.length * 2)}`,
+      sublabel: `${caddyPort ? `port=${caddyPort} ` : ''}services=${list.length}`,
       kind: 'proxy',
       state: caddyState,
       x: pos.x,
       y: pos.y,
-      url: caddySvc?.url || '',
+      url: String(caddySvc?.url || ''),
       port: caddyPort,
       fallback: caddySvc?.fallback || null,
       isTtyd: false,
@@ -266,7 +257,7 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
       id: `edge-tunnel-${caddyId}`,
       from: 'edge-tunnel',
       to: caddyId,
-      label: '*.viaal.ink',
+      label: tunnelHostLabel,
       status: caddyState === 'online' ? 'live' : 'off',
       protocol: 'SSH/TLS'
     })
@@ -318,14 +309,13 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
     const isOffline = String(svc.state || 'online').toLowerCase() === 'offline'
     const label = String(svc.name || id)
     const port = inferServicePort(svc)
-    const known = KNOWN_ASD_SERVICES[id.toLowerCase()]
-    const effectiveUrl = svc.url || known?.url || ''
+    const effectiveUrl = String(svc.url || '')
     const pos = applyPos(id, 480, Math.round(col2StartY + idx * 96))
 
     nodes.push({
       id,
       label,
-      sublabel: formatServiceEndpoint(svc.url, id, port),
+      sublabel: formatServiceEndpoint(effectiveUrl, id, port),
       kind,
       state: isOffline ? 'offline' : 'online',
       x: pos.x,
@@ -335,11 +325,11 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
       fallback: svc.fallback || null,
       isTtyd: id === 'ttyd',
       isSynthetic: Boolean(svc.__synthetic),
-      rawService: svc.__synthetic ? null : { ...svc, url: effectiveUrl }
+      rawService: svc.__synthetic ? null : svc
     })
 
     if (!hiddenIds.has(caddyId)) {
-      const routeLabel = known?.route || (id === 'hub' ? 'hub.*' : `/asde/${id}`)
+      const routeLabel = formatServiceEndpoint(effectiveUrl, id, port)
       edges.push({
         id: `edge-${caddyId}-${id}`,
         from: caddyId,
@@ -366,13 +356,12 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
     const isOffline = String(svc.state || 'online').toLowerCase() === 'offline'
     const label = String(svc.name || id)
     const port = inferServicePort(svc)
-    const known = KNOWN_ASD_SERVICES[id.toLowerCase()]
-    const effectiveUrl = svc.url || known?.url || (port ? `http://127.0.0.1:${port}` : '')
+    const effectiveUrl = String(svc.url || '')
 
     nodes.push({
       id,
       label,
-      sublabel: formatServiceEndpoint(svc.url, id, port),
+      sublabel: formatServiceEndpoint(effectiveUrl, id, port),
       kind,
       state: isOffline ? 'offline' : 'online',
       x: pos.x,
@@ -382,58 +371,21 @@ export function buildWorkspaceTopology (services = [], hiddenIds = new Set(), cu
       fallback: svc.fallback || null,
       isTtyd: false,
       isSynthetic: false,
-      rawService: { ...svc, url: effectiveUrl }
+      rawService: svc
     })
 
     if (!hiddenIds.has(caddyId)) {
-      const shortRoute = known?.route || (port ? `:${port}` : `${id.slice(0, 12)}.*`)
+      const shortRoute = formatServiceEndpoint(effectiveUrl, id, port)
       edges.push({
         id: `edge-${caddyId}-${id}`,
         from: caddyId,
         to: id,
         label: shortRoute,
         status: isOffline ? 'off' : 'live',
-        protocol: kind === 'db' ? 'TCP/HTTP' : (String(svc.url || '').startsWith('https') ? 'HTTPS' : 'HTTP')
+        protocol: kind === 'db' ? 'TCP/HTTP' : (effectiveUrl.startsWith('https') ? 'HTTPS' : 'HTTP')
       })
     }
   })
-
-  // 5. Add semantic service-to-service edges (e.g., App -> API -> DB / Mail) when present
-  const appNode = nodes.find(n => n.kind === 'app')
-  const apiNode = nodes.find(n => n.kind === 'api')
-  const dbNode = nodes.find(n => n.kind === 'db')
-  const mailNode = nodes.find(n => n.kind === 'mail')
-
-  if (appNode && apiNode) {
-    edges.push({
-      id: `edge-${appNode.id}-${apiNode.id}`,
-      from: appNode.id,
-      to: apiNode.id,
-      label: 'REST / RPC',
-      status: appNode.state === 'online' && apiNode.state === 'online' ? 'live' : 'off',
-      protocol: 'HTTP'
-    })
-  }
-  if (apiNode && dbNode) {
-    edges.push({
-      id: `edge-${apiNode.id}-${dbNode.id}`,
-      from: apiNode.id,
-      to: dbNode.id,
-      label: 'SQL / TCP',
-      status: apiNode.state === 'online' && dbNode.state === 'online' ? 'live' : 'off',
-      protocol: 'TCP'
-    })
-  }
-  if (apiNode && mailNode) {
-    edges.push({
-      id: `edge-${apiNode.id}-${mailNode.id}`,
-      from: apiNode.id,
-      to: mailNode.id,
-      label: 'SMTP / UI',
-      status: apiNode.state === 'online' && mailNode.state === 'online' ? 'live' : 'off',
-      protocol: 'SMTP'
-    })
-  }
 
   return { nodes, edges, ttydOnline }
 }
