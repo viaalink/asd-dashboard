@@ -876,6 +876,14 @@
     "returns": "string"
   },
   {
+    "name": "getActiveTopologyServices",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Get the services list for the currently active hub without mutating StorageManager.",
+    "params": [],
+    "returns": "Array<any>"
+  },
+  {
     "name": "getAuthToken",
     "kind": "function",
     "file": "src/component/widget/utils/fetchData.js",
@@ -1442,6 +1450,14 @@
     "returns": "{dispose: () => void, rescan: () => void}"
   },
   {
+    "name": "isActiveHubUnreachable",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Return true when the currently selected remote hub failed its last fetch (CORS/offline).",
+    "params": [],
+    "returns": "boolean"
+  },
+  {
     "name": "isAdding",
     "kind": "function",
     "file": "src/component/widget/widgetStore.js",
@@ -1453,6 +1469,14 @@
         "desc": ""
       }
     ],
+    "returns": "boolean"
+  },
+  {
+    "name": "isRemoteHubActive",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Return true when a non-local remote hub is currently selected.",
+    "params": [],
     "returns": "boolean"
   },
   {
@@ -2186,6 +2210,25 @@
     "returns": "string|null"
   },
   {
+    "name": "sanitizeSafeUrl",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Validate a service or action URL. Allows absolute http(s) URLs, and optionally same-origin relative URLs starting with single `/`. Rejects `javascript:`, `data:`, `file:`, protocol-relative `//`, and any other scheme.",
+    "params": [
+      {
+        "name": "rawUrl",
+        "type": "any",
+        "desc": ""
+      },
+      {
+        "name": "opts",
+        "type": "{allowRelative?: boolean}",
+        "desc": ""
+      }
+    ],
+    "returns": "string"
+  },
+  {
     "name": "sanitizeServices",
     "kind": "function",
     "file": "src/storage/validators.js",
@@ -2198,6 +2241,25 @@
       }
     ],
     "returns": "Array<object>"
+  },
+  {
+    "name": "sanitizeTopologyServices",
+    "kind": "function",
+    "file": "src/hubs/hubRegistry.js",
+    "description": "Sanitize a list of services for topology rendering. Remote hub services are strictly read-only (no fallback actions, no relative URLs, never stored in StorageManager). Local services allow same-origin relative URLs and http(s) URLs, rejecting `javascript:` and other schemes.",
+    "params": [
+      {
+        "name": "rawList",
+        "type": "Array<any>",
+        "desc": ""
+      },
+      {
+        "name": "isRemote",
+        "type": "boolean",
+        "desc": ""
+      }
+    ],
+    "returns": "Array<any>"
   },
   {
     "name": "saveCustomEdges",
@@ -2319,7 +2381,7 @@
     "name": "setActiveHubId",
     "kind": "function",
     "file": "src/hubs/hubRegistry.js",
-    "description": "Set the active hub by ID and load its services into the workspace.",
+    "description": "Set the active hub by ID and synchronize its read-only topology state.",
     "params": [
       {
         "name": "id",
@@ -2578,7 +2640,7 @@
     "name": "syncServicesFromHub",
     "kind": "function",
     "file": "src/hubs/hubRegistry.js",
-    "description": "Fetch and apply services from the given hub's endpoint.",
+    "description": "Fetch and cache read-only service status/counts/links from the given hub's endpoint. Never writes remote services into StorageManager, preserving local workspace services.",
     "params": [
       {
         "name": "hub",
